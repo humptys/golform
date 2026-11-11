@@ -99,8 +99,11 @@ const median = (a) => {
  * 탑: 임팩트 직전 구간에서 손이 가장 높은 프레임
  * 어드레스: 탑 이전, 손이 임팩트 위치 근처에서 정지해 있던 마지막 프레임
  * 피니시: 임팩트 이후 손이 가장 높은 프레임
+ *
+ * club 'approach'는 손이 조금만 올라가도 스윙으로 인정하고,
+ * 'putter'는 손이 거의 수평으로만 움직이므로 좌우 이동으로 구간을 찾는다(정면 영상 전용).
  */
-export function detectPhases(frames) {
+export function detectPhases(frames, { club = 'iron' } = {}) {
   const n = frames.length;
   const torso = median(frames.map((f) => dist(shMid(f.p), hipMid(f.p))));
   const h = frames.map((f) => hands(f.p));
@@ -123,6 +126,8 @@ export function detectPhases(frames) {
     return i;
   };
 
+  if (club === 'putter') return detectPutt({ n, torso, h, t, speed, argBest, idxAt });
+
   const peak = argBest(0, n - 1, (i) => speed[i]);
   const impact = argBest(idxAt(t[peak] - 0.1), idxAt(t[peak] + 0.15), (i) => h[i][1]);
   const top = argBest(idxAt(t[impact] - 2.0), idxAt(t[impact] - 0.08) - 1, (i) => -h[i][1]);
@@ -130,7 +135,7 @@ export function detectPhases(frames) {
     throw new SwingError('스윙 동작을 찾지 못했습니다. 어드레스부터 피니시까지 스윙 1회가 담긴 영상을 사용해 주세요.');
   };
   if (top < 0 || top >= impact) fail();
-  if (h[impact][1] - h[top][1] < 0.5 * torso) fail();
+  if (h[impact][1] - h[top][1] < (club === 'approach' ? 0.12 : 0.5) * torso) fail();
 
   const thr = 0.07 * speed[peak];
   let address = -1;
@@ -147,6 +152,54 @@ export function detectPhases(frames) {
   if (finish <= impact) finish = n - 1;
   if (finish <= impact) fail();
 
+  return { address, top, impact, finish };
+}
+
+/**
+ * 퍼팅 스트로크의 구간. 타깃 방향이 +x(정면, 오른손잡이 기준)라고 가정한다.
+ * 탑: 손이 타깃 반대쪽으로 가장 멀리 간 프레임 / 임팩트: 손이 어드레스 위치로 돌아온 프레임
+ * 피니시: 손이 타깃 쪽으로 가장 멀리 간 프레임
+ */
+function detectPutt({ n, torso, h, t, speed, argBest, idxAt }) {
+  const fail = () => {
+    throw new SwingError('퍼팅 스트로크를 찾지 못했습니다. 정면에서 찍은, 스트로크 1회가 담긴 영상을 사용해 주세요.');
+  };
+  const vx = h.map((_, i) => {
+    const a = Math.max(0, i - 1);
+    const b = Math.min(n - 1, i + 1);
+    return (h[b][0] - h[a][0]) / Math.max(1e-6, t[b] - t[a]) / torso;
+  });
+  const peak = argBest(0, n - 1, (i) => vx[i]);
+  const lo = idxAt(t[peak] - 1.5);
+  const top = argBest(lo, peak - 1, (i) => -h[i][0]);
+  if (top < 0 || h[peak][0] - h[top][0] < 0.04 * torso) fail();
+
+  // 어드레스: 탑 이전, 손이 뒤로 빠지기 전 위치에서 멈춰 있던 마지막 프레임
+  const start = argBest(lo, top - 1, (i) => h[i][0]);
+  if (start < 0) fail();
+  const backLen = h[start][0] - h[top][0];
+  if (backLen < 0.04 * torso) fail();
+  let address = -1;
+  for (let i = top - 1; i >= 0; i--) {
+    if (speed[i] < 0.1 * vx[peak] && h[i][0] - h[top][0] > 0.6 * backLen) {
+      address = i;
+      break;
+    }
+  }
+  if (address < 0) address = start;
+
+  let impact = -1;
+  for (let i = top + 1; i < n; i++) {
+    if (h[i][0] >= h[address][0]) {
+      impact = i;
+      break;
+    }
+  }
+  if (impact < 0) impact = peak;
+  if (impact <= top) fail();
+  let finish = argBest(impact + 1, idxAt(t[impact] + 1.5), (i) => h[i][0]);
+  if (finish <= impact) finish = n - 1;
+  if (finish <= impact) fail();
   return { address, top, impact, finish };
 }
 
@@ -210,9 +263,13 @@ export function computeMetrics(frames, ph, view) {
 }
 
 /** 원본 프레임 -> {phases, times, metrics} 한 번에. */
-export function analyzeSwing(raw, { aspect, leftHanded, view }) {
+export function analyzeSwing(raw, { aspect, leftHanded, view, club = 'iron' }) {
+  if (club === 'putter' && view !== 'faceon') throw new SwingError('퍼팅은 정면에서 찍은 영상만 분석할 수 있습니다.');
   const frames = prepareFrames(raw, { aspect, leftHanded });
-  const phases = detectPhases(frames);
+  const phases = detectPhases(frames, { club });
   const times = Object.fromEntries(Object.entries(phases).map(([k, i]) => [k, frames[i].t]));
-  return { phases, times, metrics: computeMetrics(frames, phases, view) };
+  // 화면에서 사람이 차지하는 키(코~발목, 화면 높이 대비). 너무 작으면 관절 위치 오차가 커진다.
+  const A = frames[phases.address].p;
+  const bodyHeight = (A[LM.L_ANK][1] + A[LM.R_ANK][1]) / 2 - A[LM.NOSE][1];
+  return { phases, times, metrics: computeMetrics(frames, phases, view), bodyHeight };
 }

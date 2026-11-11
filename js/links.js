@@ -27,7 +27,10 @@ const Q = {
 };
 const EN = { '로리 맥길로이': 'Rory McIlroy', '넬리 코다': 'Nelly Korda' };
 
-const yt = (q) => 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q);
+function yt(q) { return 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q); }
+
+/** 임의의 검색어로 가는 링크 */
+export const searchLink = yt;
 
 /** 해당 지적(기준보다 작음 low / 큼 high)의 교정 레슨 검색 링크 */
 export const lessonLink = (key, side) => (Q[key] ? yt(Q[key][side === 'low' ? 0 : 1]) : null);

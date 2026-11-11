@@ -179,3 +179,65 @@ test('어깨가 90도를 넘게 돌아 좌우가 뒤집히면 회전량이 90도
   const m = analyzeSwing(frames, { aspect: 1, view: 'faceon' }).metrics;
   assert.ok(Math.abs(m.fo_shoulder_turn_top - 120) < 3, `turn ${m.fo_shoulder_turn_top}`);
 });
+
+/** 정면에서 본 합성 퍼팅/어프로치: 손이 주로 좌우로 움직인다. rise는 손이 올라가는 높이. */
+function shortGame({ back = 0.06, through = 0.08, rise = 0 } = {}) {
+  const base = synth().frames[0].lm;
+  const frames = [];
+  const sm = (u) => u * u * (3 - 2 * u);
+  for (let i = 0; i / FPS <= 3; i++) {
+    const t = i / FPS;
+    let x = 0.5, y = 0.62;
+    if (t > 0.6 && t <= 1.2) { const u = sm((t - 0.6) / 0.6); x = 0.5 - back * u; y = 0.62 - rise * u; }
+    else if (t > 1.2 && t <= 1.8) { const u = sm((t - 1.2) / 0.6); x = 0.5 - back + (back + through) * u; y = 0.62 - rise * Math.abs(1 - 2 * u); }
+    else if (t > 1.8) { x = 0.5 + through; y = 0.62 - rise; }
+    const lm = base.map((p) => ({ ...p }));
+    lm[LM.L_WR] = { x: x + 0.01, y }; lm[LM.R_WR] = { x: x - 0.01, y };
+    frames.push({ t, lm });
+  }
+  return frames;
+}
+
+test('퍼팅: 좌우 움직임으로 구간을 찾고 템포를 잰다', () => {
+  const frames = shortGame();
+  assert.throws(() => analyzeSwing(frames, { aspect: 1, view: 'faceon', club: 'iron' }), SwingError);
+  assert.throws(() => analyzeSwing(frames, { aspect: 1, view: 'dtl', club: 'putter' }), /정면/);
+  const r = analyzeSwing(frames, { aspect: 1, view: 'faceon', club: 'putter' });
+  assert.ok(Math.abs(r.times.address - 0.6) <= 0.15, `address ${r.times.address}`);
+  assert.ok(Math.abs(r.times.top - 1.2) <= 0.1, `top ${r.times.top}`);
+  assert.ok(r.times.impact > 1.35 && r.times.impact < 1.6, `impact ${r.times.impact}`);
+  assert.ok(r.times.finish >= 1.7, `finish ${r.times.finish}`);
+  assert.ok(r.metrics.tempo > 1.4 && r.metrics.tempo < 3.2, `tempo ${r.metrics.tempo}`);
+  assert.ok(Math.abs(r.metrics.fo_head_sway_top) < 2);
+  assert.ok(r.bodyHeight > 0.5 && r.bodyHeight < 0.65);
+});
+
+test('어프로치: 손이 조금만 올라가는 작은 스윙도 인식한다', () => {
+  const frames = shortGame({ back: 0.08, through: 0.08, rise: 0.06 });
+  assert.throws(() => analyzeSwing(frames, { aspect: 1, view: 'faceon', club: 'iron' }), SwingError);
+  const r = analyzeSwing(frames, { aspect: 1, view: 'faceon', club: 'approach' });
+  assert.ok(Math.abs(r.times.top - 1.2) <= 0.12, `top ${r.times.top}`);
+  assert.ok(r.times.impact > 1.35 && r.times.impact < 1.65, `impact ${r.times.impact}`);
+});
+
+test('클럽별 내장 기준: 드라이버는 아이언과 다르고, 숏게임은 해당 항목만 본다', () => {
+  const iron = textbookStats('iron'), driver = textbookStats('driver'), approach = textbookStats('approach'), putter = textbookStats('putter');
+  assert.ok(driver.fo_stance.mean > iron.fo_stance.mean);
+  assert.equal(driver.tempo.mean, iron.tempo.mean);
+  assert.equal(approach.fo_shoulder_turn_top, undefined);
+  assert.equal(putter.fo_lead_arm_impact, undefined);
+  assert.ok(Object.keys(putter).every((k) => k === 'tempo' || k.startsWith('fo_')));
+  const ev = evaluate(Object.fromEntries(Object.entries(putter).map(([k, v]) => [k, v.mean])), putter, 'faceon');
+  assert.equal(ev.score, 100);
+  assert.equal(ev.items.length, Object.keys(putter).length);
+  assert.equal(publishedStats('로리 맥길로이', 'putter'), null);
+  assert.equal(publishedStats('로리 맥길로이', 'driver').stats.fo_stance.mean, driver.fo_stance.mean);
+});
+
+test('문구: 한 줄 지시가 모든 항목에 있고 퍼팅은 전용 문구를 쓴다', async () => {
+  const { textFor, metricByKey } = await import('../js/metrics.js');
+  for (const m of METRICS) for (const side of ['low', 'high']) assert.ok(textFor(m, side).cue.length <= 20, `${m.key} ${side}: ${textFor(m, side).cue}`);
+  const putt = textFor(metricByKey.fo_head_impact, 'high', 'putter');
+  assert.match(putt.title, /공을 따라/);
+  assert.equal(textFor(metricByKey.fo_head_impact, 'high', 'iron').title, metricByKey.fo_head_impact.high.title);
+});

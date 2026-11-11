@@ -76,3 +76,27 @@ input[type=text], input[type=url], input[type=email], input[type=password] { dis
 .bad { color: var(--major); font-size: 13px; }
 a { color: var(--accent); }
 .links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; margin-top: 10px; }
+
+.phase { display: flex; gap: 12px; align-items: flex-start; }
+.phase .shot-wrap { flex: 0 0 50%; max-width: 260px; }
+.phase.zoom { display: block; }
+.phase.zoom .shot-wrap { max-width: none; margin-bottom: 10px; }
+canvas.shot { width: 100%; display: block; border-radius: 10px; background: #000; cursor: zoom-in; }
+.phase.zoom canvas.shot { cursor: zoom-out; }
+.phase-name { text-align: center; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.notes { flex: 1; min-width: 0; }
+.note { border-left: 3px solid var(--minor); padding-left: 8px; margin-bottom: 12px; font-size: 14px; line-height: 1.4; }
+.note.major { border-left-color: var(--major); }
+.note-head { display: flex; gap: 6px; align-items: flex-start; }
+.num { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--minor); color: #0b140f; font-size: 12px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+.note.major .num { background: var(--major); }
+.cue { color: var(--accent); font-weight: 700; margin: 3px 0; }
+details > summary { color: var(--muted); font-size: 13px; cursor: pointer; padding: 2px 0; }
+details p { font-size: 13px; }
+.ok { color: var(--good); font-size: 14px; margin: 4px 0; }
+.legend { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.lg { display: inline-block; width: 18px; height: 10px; margin-left: 6px; }
+.lg.band { background: rgba(61,220,132,.3); border: 1px solid var(--accent); }
+.lg.dash { height: 0; border-top: 2px dashed #fff; }
+.lg.mine { height: 4px; background: var(--major); border-radius: 2px; }
+.seg.field button { padding: 9px 2px; font-size: 13px; }

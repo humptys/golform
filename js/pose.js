@@ -6,7 +6,6 @@ const MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/p
 
 export const MAX_SECONDS = 20;
 const MAX_FRAMES = 360;
-const BONES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]];
 
 let landmarkerPromise = null;
 let lastTs = 0; // VIDEO 모드는 호출 간 타임스탬프가 단조 증가해야 한다
@@ -65,7 +64,7 @@ async function openVideo(file) {
 }
 
 /**
- * @returns {frames: [{t, lm|null}], aspect, duration, capture(t, lm) -> dataURL, close()}
+ * @returns {frames: [{t, lm|null}], aspect, duration, capture(t, rect, width) -> canvas, close()}
  */
 export async function extractPoses(file, onProgress = () => {}) {
   onProgress(0, '모델 불러오는 중…');
@@ -100,31 +99,19 @@ export async function extractPoses(file, onProgress = () => {}) {
       }
     }
 
-    /** 해당 시점 프레임에 골격을 그려 작은 JPEG로 반환 (구간 검출 결과를 눈으로 확인하는 용도). */
-    const capture = async (t, lm) => {
+    /**
+     * 해당 시점의 프레임에서 rect(0~1 비율) 영역만 잘라 canvas로 돌려준다.
+     * 사람 주변만 확대해 보여 주기 위한 것으로, 골격과 표시는 annotate.js가 그린다.
+     */
+    const capture = async (t, rect = { x: 0, y: 0, w: 1, h: 1 }, width = 420) => {
       await seek(video, t);
+      const sw = rect.w * video.videoWidth;
+      const sh = rect.h * video.videoHeight;
       const c = document.createElement('canvas');
-      c.width = 270;
-      c.height = Math.round(270 / aspect);
-      const g = c.getContext('2d');
-      g.drawImage(video, 0, 0, c.width, c.height);
-      if (lm) {
-        g.strokeStyle = '#3ddc84';
-        g.lineWidth = 3;
-        for (const [a, b] of BONES) {
-          g.beginPath();
-          g.moveTo(lm[a].x * c.width, lm[a].y * c.height);
-          g.lineTo(lm[b].x * c.width, lm[b].y * c.height);
-          g.stroke();
-        }
-        g.fillStyle = '#fff';
-        for (const i of new Set(BONES.flat().concat(0))) {
-          g.beginPath();
-          g.arc(lm[i].x * c.width, lm[i].y * c.height, 3, 0, Math.PI * 2);
-          g.fill();
-        }
-      }
-      return c.toDataURL('image/jpeg', 0.72);
+      c.width = width;
+      c.height = Math.round((width * sh) / sw);
+      c.getContext('2d').drawImage(video, rect.x * video.videoWidth, rect.y * video.videoHeight, sw, sh, 0, 0, c.width, c.height);
+      return c;
     };
 
     return { frames, aspect, duration: video.duration, capture, close: cleanup };

@@ -134,6 +134,90 @@ export const METRICS = [
   },
 ];
 
+export const CLUBS = { driver: '드라이버', iron: '아이언', approach: '어프로치', putter: '퍼팅' };
+
+// 사진 옆 메모에 쓰는 한 줄 교정 지시. [기준보다 작을 때, 클 때]
+const CUES = {
+  fo_stance: ['발을 더 벌리기', '발 간격 좁히기'],
+  fo_shoulder_tilt_addr: ['타깃 반대쪽 어깨를 조금 낮추기', '양 어깨 높이 차이 줄이기'],
+  fo_head_sway_top: ['머리는 제자리에 두고 돌기', '체중을 뒷발 쪽에 싣기'],
+  fo_hip_sway_top: ['골반을 밀지 말고 돌리기', '체중을 뒷발 안쪽에 싣기'],
+  fo_shoulder_turn_top: ['어깨를 더 돌리기', '백스윙을 조금 줄이기'],
+  fo_hip_turn_top: ['골반도 함께 돌리기', '하체는 버티고 상체만 돌리기'],
+  fo_lead_arm_top: ['앞팔을 더 펴기', '팔 힘 빼기'],
+  fo_head_lift_top: ['주저앉지 말고 높이 유지', '일어서지 말고 높이 유지'],
+  fo_hip_shift_impact: ['골반을 타깃 쪽으로 더 보내기', '밀지 말고 회전하기'],
+  fo_head_impact: ['상체를 뒤로 젖히지 않기', '머리를 공 뒤에 두기'],
+  fo_lead_arm_impact: ['앞팔을 펴서 임팩트', '팔 힘 빼기'],
+  fo_hands_fwd_impact: ['손이 공보다 먼저 지나가게', '손목을 자연스럽게 풀기'],
+  fo_finish_weight: ['체중을 앞발 위까지 옮기기', '앞다리로 버티고 서기'],
+  dtl_spine_addr: ['엉덩이를 빼고 더 숙이기', '상체를 조금 세우기'],
+  dtl_knee_addr: ['무릎을 조금 펴기', '무릎을 살짝 굽히기'],
+  dtl_spine_change_top: ['숙인 각도 유지하기', '공 쪽으로 쏠리지 않기'],
+  dtl_trail_knee_top: ['주저앉지 않기', '뒷무릎 굽힘 유지하기'],
+  dtl_hands_height_top: ['손을 더 높이 올리기', '팔만 들지 말고 몸으로 돌기'],
+  dtl_lead_arm_top: ['앞팔을 더 펴기', '팔 힘 빼기'],
+  dtl_head_lift_top: ['주저앉지 말고 높이 유지', '일어서지 말고 높이 유지'],
+  dtl_spine_change_impact: ['일어서지 말고 숙임 유지', '공 쪽으로 덮치지 않기'],
+  dtl_hip_thrust_impact: ['체중을 발 가운데에 두기', '엉덩이를 뒤에 남기기'],
+  dtl_head_lift_impact: ['너무 주저앉지 않기', '머리 들지 않기'],
+  tempo: ['백스윙을 더 천천히', '백스윙을 멈춤 없이 한 번에'],
+};
+
+// 클럽에 따라 뜻이 달라지는 항목의 문구. 없으면 위 풀스윙 문구를 쓴다.
+const still = (part, when) => ({
+  why: `퍼팅은 어깨만 시계추처럼 움직이는 동작입니다. ${part}이(가) ${when} 움직이면 퍼터 페이스 방향과 타점이 매번 달라집니다.`,
+  fix: `${part}을(를) 고정하고, 공이 굴러간 뒤에 고개를 드세요.`,
+});
+const OVERRIDES = {
+  putter: {
+    fo_stance: {
+      low: { title: '스탠스가 좁습니다', cue: '발을 어깨 폭 정도로 벌리기', why: '기반이 좁으면 스트로크 중 몸이 흔들립니다.', fix: '양발을 어깨 폭 정도로 벌려 하체를 안정시키세요.' },
+      high: { title: '스탠스가 넓습니다', cue: '발 간격을 어깨 폭 정도로', why: '지나치게 넓으면 어깨 회전이 뻣뻣해집니다.', fix: '양발을 어깨 폭 정도로 좁히세요.' },
+    },
+    fo_head_sway_top: {
+      low: { title: '백스트로크 때 머리가 따라 움직입니다', cue: '머리 고정', ...still('머리', '백스트로크 때') },
+      high: { title: '백스트로크 때 머리가 타깃 쪽으로 움직입니다', cue: '머리 고정', ...still('머리', '백스트로크 때') },
+    },
+    fo_hip_sway_top: {
+      low: { title: '백스트로크 때 하체가 움직입니다', cue: '하체 고정', ...still('골반', '백스트로크 때') },
+      high: { title: '백스트로크 때 하체가 타깃 쪽으로 움직입니다', cue: '하체 고정', ...still('골반', '백스트로크 때') },
+    },
+    fo_head_lift_top: {
+      low: { title: '스트로크 중 머리가 내려갑니다', cue: '머리 높이 유지', ...still('머리 높이', '스트로크 중') },
+      high: { title: '스트로크 중 머리가 들립니다', cue: '머리 높이 유지', ...still('머리 높이', '스트로크 중') },
+    },
+    fo_head_impact: {
+      low: { title: '임팩트 때 머리가 뒤로 움직입니다', cue: '머리 고정', ...still('머리', '임팩트 때') },
+      high: { title: '임팩트 때 머리가 공을 따라갑니다', cue: '공이 떠난 자리 보기', ...still('머리', '임팩트 때') },
+    },
+    fo_hip_shift_impact: {
+      low: { title: '임팩트 때 하체가 뒤로 빠집니다', cue: '하체 고정', ...still('골반', '임팩트 때') },
+      high: { title: '임팩트 때 하체가 타깃 쪽으로 밀립니다', cue: '하체 고정', ...still('골반', '임팩트 때') },
+    },
+    tempo: {
+      low: { title: '백스트로크가 급합니다', cue: '백스트로크를 더 천천히', why: '급하게 빼면 임팩트에서 감속하거나 때리게 되어 거리감이 흔들립니다.', fix: '백스트로크 "하나-둘", 포워드 "셋"으로 세며 같은 리듬으로 치세요.' },
+      high: { title: '백스트로크가 느립니다', cue: '멈춤 없이 일정하게', why: '지나치게 느리면 포워드 스트로크에서 급가속하게 됩니다.', fix: '백스트로크 "하나-둘", 포워드 "셋"으로 세며 같은 리듬으로 치세요.' },
+    },
+  },
+  approach: {
+    tempo: {
+      low: { title: '백스윙이 급합니다', cue: '백스윙을 더 천천히', why: '어프로치는 거리 조절이 핵심이라 급한 백스윙은 거리 편차를 키웁니다.', fix: '백스윙 "하나-둘", 다운스윙 "셋"의 일정한 리듬으로 치세요.' },
+      high: { title: '백스윙이 느립니다', cue: '멈춤 없이 일정하게', why: '느리게 올렸다가 급히 내리면 뒤땅·탑핑이 납니다.', fix: '백스윙 "하나-둘", 다운스윙 "셋"의 일정한 리듬으로 치세요.' },
+    },
+    fo_stance: {
+      low: { title: '스탠스가 너무 좁습니다', cue: '발을 조금 더 벌리기', why: '어프로치는 좁게 서지만 지나치면 균형이 흔들립니다.', fix: '양발 사이에 주먹 하나~둘이 들어갈 정도로 서세요.' },
+      high: { title: '스탠스가 넓습니다', cue: '발 간격 좁히기', why: '어프로치에서 넓게 서면 체중이 뒤에 남아 뒤땅이 나기 쉽습니다.', fix: '발 간격을 좁히고 체중을 앞발에 조금 더 두세요.' },
+    },
+  },
+};
+
+/** 지적 문구(제목·이유·교정·한 줄 지시). 클럽별 문구가 있으면 그것을 쓴다. */
+export function textFor(m, side, club = 'iron') {
+  const base = { ...m[side], cue: CUES[m.key]?.[side === 'low' ? 0 : 1] ?? m[side].fix };
+  return { ...base, ...(OVERRIDES[club]?.[m.key]?.[side] ?? {}) };
+}
+
 export const metricByKey = Object.fromEntries(METRICS.map((m) => [m.key, m]));
 export const metricsForView = (view) => METRICS.filter((m) => m.views.includes(view));
 export const fmt = (m, v) => (v == null || !Number.isFinite(v) ? '-' : v.toFixed(m.digits) + m.unit);

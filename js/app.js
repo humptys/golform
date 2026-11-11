@@ -1,8 +1,9 @@
 import { analyzeSwing } from './swing.js';
-import { PHASES, VIEWS, metricByKey, metricsForView, fmt } from './metrics.js';
+import { PHASES, VIEWS, CLUBS, metricByKey, metricsForView, fmt, textFor } from './metrics.js';
 import { buildStats, evaluate } from './profile.js';
 import { extractPoses } from './pose.js';
-import { lessonLink, playerLink } from './links.js';
+import { lessonLink, playerLink, searchLink } from './links.js';
+import { drawPhase, drawSkeleton, PHASE_OF } from './annotate.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -14,12 +15,12 @@ const BUILTIN_PROFILE = '정석 폼'; // 영상 등록 없이 쓰는 내장 기�
 const PRESET_PROFILES = [BUILTIN_PROFILE, '로리 맥길로이', '넬리 코다'];
 const prefs = JSON.parse(localStorage.getItem('golform-prefs') || '{}');
 const state = {
-  tab: 'analyze', view: prefs.view || 'faceon', profile: prefs.profile || BUILTIN_PROFILE,
+  tab: 'analyze', view: prefs.view || 'faceon', club: prefs.club || 'iron', profile: prefs.profile || BUILTIN_PROFILE,
   leftHanded: !!prefs.leftHanded, slowmo: !!prefs.slowmo, saveVideo: prefs.saveVideo !== false,
   busy: false, detail: null, onSyncStatus: null,
 };
 const savePrefs = () => localStorage.setItem('golform-prefs', JSON.stringify({
-  view: state.view, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo, saveVideo: state.saveVideo,
+  view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo, saveVideo: state.saveVideo,
 }));
 
 const root = document.getElementById('view');
@@ -43,12 +44,18 @@ const fmtDate = (iso) => new Date(iso).toLocaleDateString('ko-KR', { month: 'num
 const fmtDateTime = (iso) => new Date(iso).toLocaleString('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const byDate = (a, b) => a.date.localeCompare(b.date);
 const profileOf = (r) => r.profile || DEFAULT_PROFILE;
+const clubOf = (r) => r.club || 'iron'; // 클럽 구분 이전의 기록은 아이언으로 본다
 const extLink = (href, label) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, label);
 
 // ───────── 공통 UI ─────────
 function viewPicker(onChange) {
   return h('div', { class: 'seg' }, Object.entries(VIEWS).map(([k, label]) =>
     h('button', { class: state.view === k ? 'on' : '', onclick: () => { if (state.busy) return; state.view = k; savePrefs(); onChange(); } }, label)));
+}
+/** 클럽 종류 선택. 종류마다 스윙 크기와 기준값이 달라 기록도 따로 쌓인다. */
+function clubPicker(onChange) {
+  return h('div', { class: 'seg field' }, Object.entries(CLUBS).map(([k, label]) =>
+    h('button', { class: state.club === k ? 'on' : '', onclick: () => { if (state.busy) return; state.club = k; savePrefs(); onChange(); } }, label)));
 }
 /** 기준 프로파일(선수) 선택. 등록된 기준 영상에 쓰인 이름과 기본 제공 이름을 보여 준다. */
 function profilePicker(allRefs, onChange) {
@@ -83,35 +90,70 @@ function progressCard() {
 }
 const errorCard = (e) => h('div', { class: 'card err' }, e?.message || String(e));
 
-/** 영상 1개 -> 측정값 + 구간별 썸네일 */
-async function processVideo(file, { view, leftHanded, slowmo }, onProgress) {
+const JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const round4 = (v) => Math.round(v * 1e4) / 1e4;
+
+/** 네 구간의 관절이 모두 들어오도록 사람 주변만 잘라낼 영역(0~1 비율). 구간끼리 위치를 비교할 수 있게 같은 영역을 쓴다. */
+function cropRect(lms, aspect) {
+  const xs = lms.flatMap((lm) => JOINTS.map((i) => lm[i].x));
+  const ys = lms.flatMap((lm) => JOINTS.map((i) => lm[i].y));
+  const bh = Math.max(...ys) - Math.min(...ys);
+  const padY = 0.18 * bh;
+  const padX = (0.3 * bh) / aspect; // 팔과 클럽이 지나가는 좌우 여백
+  const x0 = Math.max(0, Math.min(...xs) - padX), x1 = Math.min(1, Math.max(...xs) + padX);
+  const y0 = Math.max(0, Math.min(...ys) - padY), y1 = Math.min(1, Math.max(...ys) + padY * 0.6);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** 영상 1개 -> 측정값 + 구간별 사진(사람 주변 확대)과 관절 좌표 */
+async function processVideo(file, { view, leftHanded, slowmo, club }, onProgress) {
   const ex = await extractPoses(file, onProgress);
   try {
-    const r = analyzeSwing(ex.frames, { aspect: ex.aspect, leftHanded, view });
+    const r = analyzeSwing(ex.frames, { aspect: ex.aspect, leftHanded, view, club });
     if (slowmo) delete r.metrics.tempo; // 재생 속도가 바뀐 영상의 시간 비율은 믿을 수 없다
     onProgress(1, '구간 이미지 만드는 중…');
-    const thumbs = {};
+    // 구간 프레임이 보간된 프레임이면 가장 가까운 실제 검출 결과를 쓴다
+    const lmAt = (i) => {
+      for (let d = 0; d < ex.frames.length; d++) {
+        const lm = ex.frames[i - d]?.lm ?? ex.frames[i + d]?.lm;
+        if (lm) return lm;
+      }
+      return null;
+    };
+    const lms = Object.fromEntries(PHASE_KEYS.map((k) => [k, lmAt(r.phases[k])]));
+    const rect = cropRect(Object.values(lms), ex.aspect);
+    const shots = {}, pose = {}, thumbs = {};
     for (const k of PHASE_KEYS) {
-      const f = ex.frames[r.phases[k]];
-      thumbs[k] = await ex.capture(f.t, f.lm);
+      const c = await ex.capture(ex.frames[r.phases[k]].t, rect, 420);
+      shots[k] = c.toDataURL('image/jpeg', 0.7);
+      pose[k] = Object.fromEntries(JOINTS.map((i) => [i, [round4((lms[k][i].x - rect.x) / rect.w), round4((lms[k][i].y - rect.y) / rect.h)]]));
+      const t = document.createElement('canvas');
+      t.width = 150;
+      t.height = Math.round((150 * c.height) / c.width);
+      const g = t.getContext('2d');
+      g.drawImage(c, 0, 0, t.width, t.height);
+      drawSkeleton(g, pose[k], t.width, t.height, { color: '#3ddc84', width: 1.5 });
+      thumbs[k] = t.toDataURL('image/jpeg', 0.7);
     }
-    return { metrics: r.metrics, times: r.times, thumbs };
+    const warnings = [];
+    if (r.bodyHeight < 0.4) warnings.push('사람이 화면에서 작게 찍혔습니다. 관절 위치 오차가 커지므로 카메라를 더 가까이 두거나 확대해서 찍으면 정확해집니다.');
+    return { metrics: r.metrics, times: r.times, thumbs, shots, pose, warnings };
   } finally {
     ex.close();
   }
 }
 
-const pickRefs = (all, view, profile) => all.filter((r) => r.view === view && profileOf(r) === profile).sort(byDate);
+const pickRefs = (all, view, profile, club) => all.filter((r) => r.view === view && profileOf(r) === profile && clubOf(r) === club).sort(byDate);
 const isBuiltin = (profile) => profile === BUILTIN_PROFILE;
 /**
  * 비교에 쓸 기준을 정한다.
  * textbook: 내장 정석 폼 / refs: 등록한 기준 영상 / published: 선수의 공개 측정 수치 + 투어 기준(영상을 등록하면 영상이 우선)
  */
-function basisFor(all, view, profile) {
-  if (isBuiltin(profile)) return { kind: 'textbook', stats: textbookStats() };
-  const refs = pickRefs(all, view, profile);
+function basisFor(all, view, profile, club) {
+  if (isBuiltin(profile)) return { kind: 'textbook', stats: textbookStats(club) };
+  const refs = pickRefs(all, view, profile, club);
   if (refs.length) return { kind: 'refs', stats: buildStats(refs) };
-  const pub = publishedStats(profile);
+  const pub = publishedStats(profile, club);
   if (pub) return { kind: 'published', stats: pub.stats, note: pub.note };
   return { kind: 'none', stats: {} };
 }
@@ -121,8 +163,8 @@ const sourceList = () => h('div', { class: 'card' }, h('p', { class: 'muted' }, 
 // ───────── 분석 탭 ─────────
 async function renderAnalyze() {
   const allRefs = await db.getAll('refs');
-  const refs = pickRefs(allRefs, state.view, state.profile);
-  const basis = basisFor(allRefs, state.view, state.profile);
+  const refs = pickRefs(allRefs, state.view, state.profile, state.club);
+  const basis = basisFor(allRefs, state.view, state.profile, state.club);
   const out = h('div');
   const run = async ([file]) => {
     state.busy = true;
@@ -132,8 +174,8 @@ async function renderAnalyze() {
       const r = await processVideo(file, state, pc.update);
       const ev = evaluate(r.metrics, basis.stats, state.view);
       const session = {
-        id: db.newId(), date: new Date().toISOString(), view: state.view, profile: state.profile, leftHanded: state.leftHanded, name: file.name,
-        metrics: r.metrics, times: r.times, thumbs: r.thumbs, score: ev.score, items: ev.items, refCount: refs.length, basis: basis.kind, hasVideo: false,
+        id: db.newId(), date: new Date().toISOString(), view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, name: file.name,
+        metrics: r.metrics, times: r.times, thumbs: r.thumbs, shots: r.shots, pose: r.pose, warnings: r.warnings, score: ev.score, items: ev.items, refCount: refs.length, basis: basis.kind, hasVideo: false,
       };
       if (state.saveVideo) {
         try { await db.put('videos', { id: session.id, blob: file }); session.hasVideo = true; } catch { /* 공간 부족 시 영상만 생략 */ }
@@ -149,19 +191,21 @@ async function renderAnalyze() {
 
   mount(
     h('h2', {}, '내 스윙 분석'),
-    viewPicker(render),
+    viewPicker(render), clubPicker(render),
     profilePicker(allRefs, render),
     check('왼손잡이 스윙', 'leftHanded'),
     check('슬로모션 영상 (템포 비교 제외)', 'slowmo'),
     check('영상 원본도 이 기기에 저장 (기록에서 다시 보기)', 'saveVideo'),
-    basis.kind === 'none'
+    state.club === 'putter' && state.view === 'dtl'
+      ? h('div', { class: 'card warn' }, h('p', {}, '퍼팅은 정면에서 찍은 영상만 분석할 수 있습니다.'), h('p', { class: 'muted' }, '측면에서는 퍼터가 앞뒤로 움직이는 것이 화면에 거의 드러나지 않아 스트로크 구간을 찾을 수 없습니다. 위에서 「정면」을 선택하세요.'))
+      : basis.kind === 'none'
       ? h('div', { class: 'card warn' },
-          h('p', {}, `「${state.profile}」의 ${VIEWS[state.view]} 기준 영상이 아직 없습니다.`),
+          h('p', {}, `「${state.profile}」의 ${VIEWS[state.view]}·${CLUBS[state.club]} 기준이 아직 없습니다.`),
           h('p', { class: 'muted' }, '이 이름으로 공개된 측정 수치를 찾지 못했습니다. 기준 스윙 영상을 등록하거나 「정석 폼」 기준을 선택하세요.'),
           h('button', { class: 'btn', onclick: () => go('refs') }, '기준 영상 등록하러 가기'))
       : h('div', { class: 'card' },
           h('p', { class: 'muted' }, basis.kind === 'textbook'
-            ? '내장된 「정석 폼」 기준과 비교합니다. 기준 영상을 등록하지 않아도 바로 분석할 수 있습니다. 미들 아이언 풀스윙 기준입니다.'
+            ? `내장된 「정석 폼」의 ${CLUBS[state.club]} 기준과 비교합니다. 기준 영상을 등록하지 않아도 바로 분석할 수 있습니다.`
             : basis.kind === 'published'
             ? `「${state.profile}」의 공개된 측정 수치와 비교합니다. ${basis.note}`
             : `「${state.profile}」 ${VIEWS[state.view]} 기준 영상 ${refs.length}개와 비교합니다.` + (refs.length < 3 ? ' 3개 이상 등록하면 기준이 더 안정적입니다.' : '')),
@@ -170,28 +214,66 @@ async function renderAnalyze() {
   );
 }
 
+/** 구간 사진에 골격과 교정 표시를 그린 canvas. 누르면 크게 본다. */
+function phaseCanvas(s, phase, items) {
+  const canvas = h('canvas', { class: 'shot', onclick: (e) => e.target.closest('.phase')?.classList.toggle('zoom') });
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const g = canvas.getContext('2d');
+    g.drawImage(img, 0, 0);
+    drawPhase(g, img.width, img.height, s.pose, phase, items, { leftHanded: s.leftHanded });
+  };
+  img.src = s.shots[phase];
+  return canvas;
+}
+
+/** 사진 옆에 붙는 메모 한 건: 무엇이 문제인지와 어떻게 할지 한 줄씩. 긴 설명은 접어 둔다. */
+function noteItem(s, i) {
+  const m = metricByKey[i.key];
+  if (!m) return null;
+  const club = clubOf(s), profile = profileOf(s);
+  const t = textFor(m, i.side, club);
+  const lesson = club === 'approach' || club === 'putter' ? searchLink(`골프 ${CLUBS[club]} ${t.cue} 레슨`) : lessonLink(i.key, i.side);
+  return h('div', { class: `note ${i.severity}` },
+    h('div', { class: 'note-head' }, h('span', { class: 'num' }, String(i.n)), h('b', {}, t.title)),
+    h('div', { class: 'cue' }, '→ ' + t.cue),
+    h('details', {}, h('summary', {}, '자세히'),
+      h('p', { class: 'nums' }, m.label, ': 내 값 ', h('b', {}, fmt(m, i.value)), ' · 기준 ', h('b', {}, fmt(m, i.mean)), ` (±${i.tol.toFixed(m.digits)})`),
+      h('p', {}, h('b', {}, '왜 문제인가 '), t.why),
+      h('p', {}, h('b', {}, '교정 '), t.fix),
+      t.drill && h('p', {}, h('b', {}, '연습법 '), t.drill),
+      h('p', { class: 'links' },
+        lesson && extLink(lesson, '▶ 레슨 영상 찾기'),
+        profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, s.view), `▶ ${profile} 스윙 보기`))));
+}
+
 async function resultView(s) {
-  const profile = profileOf(s);
-  const prev = (await db.getAll('sessions')).filter((x) => x.view === s.view && profileOf(x) === profile && x.date < s.date && x.score != null).sort(byDate).pop();
-  const issues = s.items.filter((i) => i.severity !== 'good').sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
-  const nums = (i, m) => h('p', { class: 'nums' }, '내 값 ', h('b', {}, fmt(m, i.value)), ' · 기준 ', h('b', {}, fmt(m, i.mean)), ` (허용 ±${i.tol.toFixed(m.digits)})`);
+  const profile = profileOf(s), club = clubOf(s);
+  const prev = (await db.getAll('sessions')).filter((x) => x.view === s.view && profileOf(x) === profile && clubOf(x) === club && x.date < s.date && x.score != null).sort(byDate).pop();
+  // 번호는 화면에 나오는 순서(어드레스 -> 피니시, 구간 안에서는 차이가 큰 순)대로 매긴다
+  const order = (i) => { const k = PHASE_KEYS.indexOf(PHASE_OF[i.key]); return k < 0 ? PHASE_KEYS.length : k; };
+  const issues = s.items.filter((i) => i.severity !== 'good')
+    .sort((a, b) => order(a) - order(b) || Math.abs(b.z) - Math.abs(a.z))
+    .map((i, n) => ({ ...i, n: n + 1 }));
+  const basis = s.basis ?? (isBuiltin(profile) ? 'textbook' : 'refs');
 
   const el = h('div', {},
     h('div', { class: 'card' },
       h('div', { class: 'row' },
         h('div', { class: 'grow' },
-          h('div', { class: 'muted' }, `${fmtDateTime(s.date)} · ${VIEWS[s.view]} · 기준 ${profile}`),
+          h('div', { class: 'muted' }, `${fmtDateTime(s.date)} · ${VIEWS[s.view]} · ${CLUBS[club]} · 기준 ${profile}`),
           h('div', { class: 'score' }, String(s.score ?? '-'), h('small', {}, ' / 100')),
           prev && h('div', { class: 'muted' }, `직전 분석(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`)),
         h('div', {}, h('span', { class: 'tag major' }, `교정 필요 ${issues.filter((i) => i.severity === 'major').length}`), h('span', { class: 'tag minor' }, `주의 ${issues.filter((i) => i.severity === 'minor').length}`))),
-      h('p', { class: 'muted' }, (s.basis ?? (isBuiltin(profile) ? 'textbook' : 'refs')) === 'textbook'
-        ? '점수는 투어 프로 공개 데이터와 일반적인 레슨 기준(정석 폼)에 얼마나 가까운지를 뜻합니다. 영상으로 보정한 기준이 아니므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
-        : s.basis === 'published'
-        ? `점수는 「${profile}」의 공개된 측정 수치(일부 항목)와 투어 프로 일반 기준에 얼마나 가까운지를 뜻합니다. 선수의 영상을 직접 분석한 기준은 아닙니다.`
-        : `점수는 「${profile}」 기준 영상 ${s.refCount}개와 얼마나 비슷한지를 뜻하며, 스윙의 절대적인 좋고 나쁨이 아닙니다.`)),
-    h('div', { class: 'card' },
-      h('div', { class: 'thumbs' }, PHASE_KEYS.map((k) => h('figure', {}, h('img', { src: s.thumbs[k], alt: PHASES[k] }), PHASES[k]))),
-      h('p', { class: 'muted' }, '자동으로 찾은 구간입니다. 이미지가 실제 구간과 다르거나 골격선이 몸에서 벗어나 있으면 이 분석 결과는 믿지 마세요.')),
+      h('details', {}, h('summary', {}, '점수의 의미'),
+        h('p', { class: 'muted' }, basis === 'textbook'
+          ? '투어 프로 공개 데이터와 일반적인 레슨 기준(정석 폼)에 얼마나 가까운지를 뜻합니다. 영상으로 보정한 기준이 아니므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
+          : basis === 'published'
+          ? `「${profile}」의 공개된 측정 수치(일부 항목)와 투어 프로 일반 기준에 얼마나 가까운지를 뜻합니다. 선수의 영상을 직접 분석한 기준은 아닙니다.`
+          : `「${profile}」 기준 영상 ${s.refCount}개와 얼마나 비슷한지를 뜻하며, 스윙의 절대적인 좋고 나쁨이 아닙니다.`))),
+    (s.warnings ?? []).map((w) => h('div', { class: 'card warn' }, w)),
   );
 
   if (s.hasVideo) {
@@ -202,26 +284,29 @@ async function resultView(s) {
     el.append(holder);
   }
 
-  el.append(h('h2', {}, issues.length ? '고쳐야 할 점 (차이가 큰 순)' : '기준과 큰 차이가 없습니다'));
-  for (const i of issues) {
-    const m = metricByKey[i.key];
-    if (!m) continue;
-    const t = m[i.side];
-    const lesson = lessonLink(i.key, i.side);
-    el.append(h('div', { class: `card issue ${i.severity}` },
-      h('div', {}, h('span', { class: `tag ${i.severity}` }, SEV[i.severity]), h('span', { class: 'tag' }, PHASES[m.phase])),
-      h('h3', {}, t.title),
-      h('p', { class: 'muted' }, m.label), nums(i, m),
-      h('p', {}, h('b', {}, '왜 문제인가 '), t.why),
-      h('p', {}, h('b', {}, '이렇게 고치세요 '), t.fix),
-      t.drill && h('p', {}, h('b', {}, '연습법 '), t.drill),
-      h('p', { class: 'links' },
-        lesson && extLink(lesson, '▶ 교정 레슨 영상 찾기'),
-        profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, s.view), `▶ ${profile} ${VIEWS[s.view].replace(/\(.*/, '')} 스윙 보기`))));
+  if (s.shots && s.pose) {
+    el.append(
+      h('h2', {}, issues.length ? '사진으로 보는 교정 포인트' : '기준과 큰 차이가 없습니다'),
+      h('p', { class: 'legend' }, h('span', { class: 'lg band' }), '기준 범위 ', h('span', { class: 'lg dash' }), '기준 자세 ', h('span', { class: 'lg mine' }), '내 자세 ', '➜ 옮길 방향'),
+      h('p', { class: 'muted' }, '사진을 누르면 커집니다. 골격선이 몸에서 벗어나 있거나 구간이 실제와 다르면 그 구간의 지적은 믿지 마세요.'));
+    for (const phase of PHASE_KEYS) {
+      const items = issues.filter((i) => PHASE_OF[i.key] === phase);
+      el.append(h('div', { class: 'card phase' },
+        h('div', { class: 'shot-wrap' }, phaseCanvas(s, phase, items), h('div', { class: 'phase-name' }, PHASES[phase])),
+        h('div', { class: 'notes' }, items.length ? items.map((i) => noteItem(s, i)) : h('p', { class: 'ok' }, '✓ 기준과 비슷합니다'))));
+    }
+    const rest = issues.filter((i) => !PHASE_OF[i.key]);
+    if (rest.length) el.append(h('div', { class: 'card' }, h('h3', {}, '리듬'), h('div', { class: 'notes' }, rest.map((i) => noteItem(s, i)))));
+  } else {
+    // 사진 좌표가 저장되지 않은 예전 기록
+    el.append(
+      h('div', { class: 'card' }, h('div', { class: 'thumbs' }, PHASE_KEYS.map((k) => h('figure', {}, h('img', { src: s.thumbs[k], alt: PHASES[k] }), PHASES[k])))),
+      h('h2', {}, issues.length ? '고쳐야 할 점 (차이가 큰 순)' : '기준과 큰 차이가 없습니다'),
+      issues.length > 0 && h('div', { class: 'card' }, h('div', { class: 'notes' }, issues.map((i) => noteItem(s, i)))),
+      h('p', { class: 'muted' }, '이 기록은 예전 방식으로 저장되어 사진 위 표시가 없습니다. 영상을 다시 분석하면 사진과 함께 볼 수 있습니다.'));
   }
-  if (issues.length) el.append(h('p', { class: 'muted' }, '참고 영상 링크는 유튜브 검색 결과로 연결됩니다. 특정 영상을 추천하는 것이 아니므로 여러 영상을 비교해 보세요.'));
 
-  el.append(h('h2', {}, '전체 측정값'), h('div', { class: 'card' }, h('table', {},
+  el.append(h('details', { class: 'card' }, h('summary', {}, '전체 측정값 보기'), h('table', {},
     h('tr', {}, h('th', {}, '항목'), h('th', {}, '내 값'), h('th', {}, '기준')),
     s.items.map((i) => {
       const m = metricByKey[i.key];
@@ -233,8 +318,8 @@ async function resultView(s) {
 // ───────── 기준 영상 탭 ─────────
 async function renderRefs() {
   const allRefs = await db.getAll('refs');
-  const refs = pickRefs(allRefs, state.view, state.profile);
-  const basis = basisFor(allRefs, state.view, state.profile);
+  const refs = pickRefs(allRefs, state.view, state.profile, state.club);
+  const basis = basisFor(allRefs, state.view, state.profile, state.club);
   const stats = basis.stats;
   const statsTable = (title, devLabel) => h('div', {}, h('h3', {}, title), h('div', { class: 'card' }, h('table', {},
     h('tr', {}, h('th', {}, '항목'), h('th', {}, '기준'), h('th', {}, devLabel)),
@@ -243,11 +328,11 @@ async function renderRefs() {
   if (isBuiltin(state.profile)) {
     return mount(
       h('h2', {}, '기준 영상'),
-      viewPicker(render),
+      viewPicker(render), clubPicker(render),
       profilePicker(allRefs, render),
       h('div', { class: 'card' },
         h('p', {}, '「정석 폼」은 앱에 내장된 기준이라 영상을 등록할 필요가 없습니다.'),
-        h('p', { class: 'muted' }, '투어 프로를 3D 장비로 측정해 공개한 데이터와, 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다. 미들 아이언 풀스윙 기준이라 드라이버는 스탠스·어깨 기울기 항목이 다르게 나올 수 있습니다.'),
+        h('p', { class: 'muted' }, '투어 프로를 3D 장비로 측정해 공개한 데이터와, 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다. 위에서 고른 클럽 종류에 맞는 기준값이 쓰입니다.'),
         h('p', { class: 'muted' }, '특정 선수나 내 베스트 스윙을 기준으로 삼고 싶다면 위에서 다른 프로파일을 고르고 영상을 등록하세요.'),
         h('button', { class: 'btn primary', onclick: () => go('analyze') }, '바로 분석하러 가기')),
       statsTable(`「정석 폼」 ${VIEWS[state.view]} 기준값`, '허용 범위'),
@@ -257,7 +342,7 @@ async function renderRefs() {
   const add = async (files) => {
     state.busy = true;
     const errors = [];
-    const target = { view: state.view, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo };
+    const target = { view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo };
     for (const [n, file] of files.entries()) {
       const pc = progressCard();
       out.replaceChildren(h('p', { class: 'muted' }, `${n + 1} / ${files.length} · ${file.name}`), pc.el);
@@ -275,7 +360,7 @@ async function renderRefs() {
 
   mount(
     h('h2', {}, '기준 영상'),
-    viewPicker(render),
+    viewPicker(render), clubPicker(render),
     profilePicker(allRefs, render),
     check('왼손잡이 스윙', 'leftHanded'),
     check('슬로모션 영상 (템포는 기준에서 제외)', 'slowmo'),
@@ -351,8 +436,8 @@ async function renderHistory() {
   }
 
   const allRefs = await db.getAll('refs');
-  const sessions = (await db.getAll('sessions')).filter((s) => s.view === state.view && profileOf(s) === state.profile).sort(byDate);
-  const stats = basisFor(allRefs, state.view, state.profile).stats;
+  const sessions = (await db.getAll('sessions')).filter((s) => s.view === state.view && profileOf(s) === state.profile && clubOf(s) === state.club).sort(byDate);
+  const stats = basisFor(allRefs, state.view, state.profile, state.club).stats;
   const scored = sessions.filter((s) => s.score != null);
   const metricBox = h('div');
   const select = h('select', { onchange: () => drawMetric() }, metricsForView(state.view).map((m) => h('option', { value: m.key }, `${PHASES[m.phase]} · ${m.label}`)));
@@ -369,7 +454,7 @@ async function renderHistory() {
 
   mount(
     h('h2', {}, '분석 기록과 발전 추이'),
-    viewPicker(render),
+    viewPicker(render), clubPicker(render),
     profilePicker(allRefs, render),
     sessions.length === 0 ? h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${VIEWS[state.view]} 분석 기록이 아직 없습니다.`) : [
       h('div', { class: 'card' }, h('h3', {}, '점수 추이'),
