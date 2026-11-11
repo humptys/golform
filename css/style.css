@@ -110,3 +110,14 @@ details p { font-size: 13px; }
 
 .explain { margin: 8px 0 12px; }
 .explain td:last-child, .explain th:last-child { white-space: nowrap; }
+
+.shot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-top: 6px; }
+.shot-field span { font-size: 12px; color: var(--muted); }
+.shot-field input { margin: 2px 0 8px; padding: 9px 10px; }
+.shot-preview { width: 100%; border-radius: 10px; margin-top: 8px; }
+.warn-text { color: var(--minor); font-size: 13px; }
+.shape { font-size: 26px; font-weight: 800; margin: 2px 0 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.chip { font-size: 12px; padding: 3px 8px; border-radius: 99px; background: #213328; color: var(--muted); }
+.chip b { color: var(--text); }
+details.card > summary { font-size: 15px; color: var(--text); }

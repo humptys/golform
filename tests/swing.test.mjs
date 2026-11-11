@@ -267,3 +267,47 @@ test('임팩트는 손이 어드레스 위치로 돌아온 프레임으로 잡�
   const r = analyzeSwing(frames, { aspect: 1, view: 'faceon' });
   assert.ok(Math.abs(r.times.impact - s.t.impact) <= 0.07, `impact ${r.times.impact}`);
 });
+
+test('샷 데이터: 입력 해석과 구질 판정', async () => {
+  const { parseShotValue, buildShot, analyzeShot } = await import('../js/shot.js');
+  assert.equal(parseShotValue('R3.3'), 3.3);
+  assert.equal(parseShotValue('L 2'), -2);
+  assert.equal(parseShotValue('-735'), -735);
+  assert.equal(parseShotValue(''), null);
+  assert.equal(parseShotValue('abc'), null);
+  assert.equal(buildShot({ carry: '', dir: ' ' }), null);
+
+  // 사용자의 GDR 화면: 오른쪽으로 7.1도 출발, 왼쪽으로 휘어 R3.3m
+  const shot = buildShot({ total: '219', carry: '202', side: 'R3.3', apex: '31.7', ballSpeed: '61.3', launch: '18', dir: '7.1', backSpin: '1966', sideSpin: '-735' });
+  const r = analyzeShot(shot, { club: 'driver' });
+  assert.equal(r.name, '푸시 드로우');
+  assert.ok(r.lines.some((l) => l.includes('상쇄')));
+  assert.ok(r.lines.some((l) => l.includes('발사각 18°')));
+  assert.ok(r.related.includes('fo_hip_shift_impact:high'));
+  // 왼손잡이에게 같은 숫자는 풀 페이드
+  assert.equal(analyzeShot(shot, { club: 'driver', leftHanded: true }).name, '풀 페이드');
+  // 회전축이 크게 기울면 슬라이스
+  assert.equal(analyzeShot({ dir: 0.5, backSpin: 2500, sideSpin: 1600 }, {}).name, '슬라이스');
+  assert.equal(analyzeShot({ dir: -4 }, {}).name, '풀');
+  assert.equal(analyzeShot({ carry: 150 }, {}).hasShape, false);
+});
+
+test('촬영 방향 자동 인식: 어깨와 골반이 벌어져 보이면 정면, 겹쳐 보이면 측면', () => {
+  const s = synth();
+  const face = analyzeSwing(s.frames, { aspect: 1, view: 'auto' });
+  assert.equal(face.view, 'faceon');
+  assert.ok(Number.isFinite(face.metrics.fo_stance));
+  // 측면: 좌우 관절이 거의 겹친다
+  const side = s.frames.map((f) => {
+    const lm = f.lm.map((p) => ({ ...p }));
+    for (const [l, r] of [[LM.L_SH, LM.R_SH], [LM.L_HIP, LM.R_HIP], [LM.L_KNEE, LM.R_KNEE], [LM.L_ANK, LM.R_ANK]]) {
+      const c = (lm[l].x + lm[r].x) / 2;
+      lm[l].x = c + 0.008; lm[r].x = c - 0.008;
+    }
+    return { t: f.t, lm };
+  });
+  const dtl = analyzeSwing(side, { aspect: 1, view: 'auto' });
+  assert.equal(dtl.view, 'dtl');
+  assert.ok(Number.isFinite(dtl.metrics.dtl_spine_addr));
+  assert.equal(analyzeSwing(s.frames, { aspect: 1, view: 'faceon' }).view, 'faceon');
+});

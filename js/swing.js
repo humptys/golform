@@ -270,14 +270,26 @@ export function computeMetrics(frames, ph, view) {
   return m;
 }
 
-/** 원본 프레임 -> {phases, times, metrics} 한 번에. */
+/**
+ * 어드레스 자세로 촬영 방향을 추정한다.
+ * 정면에서는 양 어깨·골반이 좌우로 벌어져 보이고, 측면(타깃 후방)에서는 거의 겹쳐 보인다.
+ */
+export function detectView(A) {
+  const torso = dist(shMid(A), hipMid(A));
+  const shoulders = Math.abs(A[LM.L_SH][0] - A[LM.R_SH][0]) / torso;
+  const hips = Math.abs(A[LM.L_HIP][0] - A[LM.R_HIP][0]) / torso;
+  return shoulders + hips > 0.75 ? 'faceon' : 'dtl';
+}
+
+/** 원본 프레임 -> {phases, times, view, metrics} 한 번에. view가 'auto'면 촬영 방향을 추정한다. */
 export function analyzeSwing(raw, { aspect, leftHanded, view, club = 'iron' }) {
-  if (club === 'putter' && view !== 'faceon') throw new SwingError('퍼팅은 정면에서 찍은 영상만 분석할 수 있습니다.');
+  if (club === 'putter' && view === 'dtl') throw new SwingError('퍼팅은 정면에서 찍은 영상만 분석할 수 있습니다.');
   const frames = prepareFrames(raw, { aspect, leftHanded });
   const phases = detectPhases(frames, { club });
+  if (view === 'auto') view = club === 'putter' ? 'faceon' : detectView(frames[phases.address].p);
   const times = Object.fromEntries(Object.entries(phases).map(([k, i]) => [k, frames[i].t]));
   // 화면에서 사람이 차지하는 키(코~발목, 화면 높이 대비). 너무 작으면 관절 위치 오차가 커진다.
   const A = frames[phases.address].p;
   const bodyHeight = (A[LM.L_ANK][1] + A[LM.R_ANK][1]) / 2 - A[LM.NOSE][1];
-  return { phases, times, metrics: computeMetrics(frames, phases, view), bodyHeight };
+  return { phases, times, view, metrics: computeMetrics(frames, phases, view), bodyHeight };
 }
