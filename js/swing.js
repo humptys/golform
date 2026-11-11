@@ -174,7 +174,8 @@ export function computeMetrics(frames, ph, view) {
   if (view === 'faceon') {
     // 정면: 오른손잡이 기준 타깃 방향 = 화면 오른쪽(+x)
     const pctX = (a, b) => ((a[0] - b[0]) / shW) * 100;
-    const turn = (p, l, r) => deg(Math.acos(clamp(Math.abs(p[l][0] - p[r][0]) / Math.abs(A[l][0] - A[r][0]), 0, 1)));
+    // 화면상 좌우 폭이 줄어든 비율로 회전량을 추정한다. 90도를 넘게 돌면 좌우 순서가 뒤집혀 비율이 음수가 된다.
+    const turn = (p, l, r) => deg(Math.acos(clamp((p[l][0] - p[r][0]) / (A[l][0] - A[r][0]), -1, 1)));
     m.fo_stance = dist(A[LM.L_ANK], A[LM.R_ANK]) / shW;
     m.fo_shoulder_tilt_addr = deg(Math.atan2(A[LM.R_SH][1] - A[LM.L_SH][1], Math.abs(A[LM.L_SH][0] - A[LM.R_SH][0])));
     m.fo_head_sway_top = pctX(T[LM.NOSE], A[LM.NOSE]);

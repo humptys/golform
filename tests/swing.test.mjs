@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LM, analyzeSwing, prepareFrames, detectPhases, angle3, SwingError } from '../js/swing.js';
 import { buildStats, evaluate } from '../js/profile.js';
 import { METRICS, metricsForView } from '../js/metrics.js';
-import { textbookStats, TEXTBOOK_KEYS } from '../js/textbook.js';
+import { textbookStats, publishedStats, TEXTBOOK_KEYS } from '../js/textbook.js';
 
 const FPS = 30;
 const lerp = (a, b, u) => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
@@ -156,4 +156,26 @@ test('내장 기준(정석 폼)은 모든 항목을 덮고, 기준과 같은 값
       assert.ok(bad.issues.every((i) => i.severity === 'major'));
     }
   }
+});
+
+test('선수의 공개 수치는 해당 항목만 덮어쓴다', () => {
+  const base = textbookStats();
+  const rory = publishedStats('로리 맥길로이');
+  assert.equal(rory.stats.fo_shoulder_turn_top.mean, 116);
+  assert.equal(rory.stats.fo_hip_turn_top.mean, 42);
+  for (const k of TEXTBOOK_KEYS) if (!rory.keys.includes(k)) assert.deepEqual(rory.stats[k], base[k], k);
+  assert.equal(publishedStats('넬리 코다'), null);
+});
+
+test('어깨가 90도를 넘게 돌아 좌우가 뒤집히면 회전량이 90도보다 크게 나온다', () => {
+  const s = synth();
+  // 탑 부근(1.2~1.6초)에서 어깨의 좌우 위치를 절반 폭으로 뒤집는다 -> acos(-0.5) = 120도
+  const frames = s.frames.map((f) => {
+    if (f.t < 1.2 || f.t > 1.6) return f;
+    const lm = f.lm.map((p) => ({ ...p }));
+    lm[LM.L_SH].x = 0.47; lm[LM.R_SH].x = 0.53;
+    return { t: f.t, lm };
+  });
+  const m = analyzeSwing(frames, { aspect: 1, view: 'faceon' }).metrics;
+  assert.ok(Math.abs(m.fo_shoulder_turn_top - 120) < 3, `turn ${m.fo_shoulder_turn_top}`);
 });

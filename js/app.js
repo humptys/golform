@@ -3,7 +3,7 @@ import { PHASES, VIEWS, metricByKey, metricsForView, fmt } from './metrics.js';
 import { buildStats, evaluate } from './profile.js';
 import { extractPoses } from './pose.js';
 import { lessonLink, playerLink } from './links.js';
-import { textbookStats } from './textbook.js';
+import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
 
@@ -103,13 +103,26 @@ async function processVideo(file, { view, leftHanded, slowmo }, onProgress) {
 
 const pickRefs = (all, view, profile) => all.filter((r) => r.view === view && profileOf(r) === profile).sort(byDate);
 const isBuiltin = (profile) => profile === BUILTIN_PROFILE;
-const statsFor = (all, view, profile) => (isBuiltin(profile) ? textbookStats() : buildStats(pickRefs(all, view, profile)));
+/**
+ * 비교에 쓸 기준을 정한다.
+ * textbook: 내장 정석 폼 / refs: 등록한 기준 영상 / published: 선수의 공개 측정 수치 + 투어 기준(영상을 등록하면 영상이 우선)
+ */
+function basisFor(all, view, profile) {
+  if (isBuiltin(profile)) return { kind: 'textbook', stats: textbookStats() };
+  const refs = pickRefs(all, view, profile);
+  if (refs.length) return { kind: 'refs', stats: buildStats(refs) };
+  const pub = publishedStats(profile);
+  if (pub) return { kind: 'published', stats: pub.stats, note: pub.note };
+  return { kind: 'none', stats: {} };
+}
+const sourceList = () => h('div', { class: 'card' }, h('p', { class: 'muted' }, '측정 데이터 출처 (그 밖의 항목은 일반적인 레슨 기준입니다)'),
+  h('ul', {}, SOURCES.map((x) => h('li', {}, extLink(x.url, x.label)))));
 
 // ───────── 분석 탭 ─────────
 async function renderAnalyze() {
   const allRefs = await db.getAll('refs');
   const refs = pickRefs(allRefs, state.view, state.profile);
-  const builtin = isBuiltin(state.profile);
+  const basis = basisFor(allRefs, state.view, state.profile);
   const out = h('div');
   const run = async ([file]) => {
     state.busy = true;
@@ -117,10 +130,10 @@ async function renderAnalyze() {
     out.replaceChildren(pc.el);
     try {
       const r = await processVideo(file, state, pc.update);
-      const ev = evaluate(r.metrics, statsFor(allRefs, state.view, state.profile), state.view);
+      const ev = evaluate(r.metrics, basis.stats, state.view);
       const session = {
         id: db.newId(), date: new Date().toISOString(), view: state.view, profile: state.profile, leftHanded: state.leftHanded, name: file.name,
-        metrics: r.metrics, times: r.times, thumbs: r.thumbs, score: ev.score, items: ev.items, refCount: refs.length, builtin, hasVideo: false,
+        metrics: r.metrics, times: r.times, thumbs: r.thumbs, score: ev.score, items: ev.items, refCount: refs.length, basis: basis.kind, hasVideo: false,
       };
       if (state.saveVideo) {
         try { await db.put('videos', { id: session.id, blob: file }); session.hasVideo = true; } catch { /* 공간 부족 시 영상만 생략 */ }
@@ -141,14 +154,16 @@ async function renderAnalyze() {
     check('왼손잡이 스윙', 'leftHanded'),
     check('슬로모션 영상 (템포 비교 제외)', 'slowmo'),
     check('영상 원본도 이 기기에 저장 (기록에서 다시 보기)', 'saveVideo'),
-    !builtin && refs.length === 0
+    basis.kind === 'none'
       ? h('div', { class: 'card warn' },
           h('p', {}, `「${state.profile}」의 ${VIEWS[state.view]} 기준 영상이 아직 없습니다.`),
-          h('p', { class: 'muted' }, '먼저 이 프로파일에 기준 스윙 영상을 등록해야 비교할 수 있습니다.'),
+          h('p', { class: 'muted' }, '이 이름으로 공개된 측정 수치를 찾지 못했습니다. 기준 스윙 영상을 등록하거나 「정석 폼」 기준을 선택하세요.'),
           h('button', { class: 'btn', onclick: () => go('refs') }, '기준 영상 등록하러 가기'))
       : h('div', { class: 'card' },
-          h('p', { class: 'muted' }, builtin
+          h('p', { class: 'muted' }, basis.kind === 'textbook'
             ? '내장된 「정석 폼」 기준과 비교합니다. 기준 영상을 등록하지 않아도 바로 분석할 수 있습니다. 미들 아이언 풀스윙 기준입니다.'
+            : basis.kind === 'published'
+            ? `「${state.profile}」의 공개된 측정 수치와 비교합니다. ${basis.note}`
             : `「${state.profile}」 ${VIEWS[state.view]} 기준 영상 ${refs.length}개와 비교합니다.` + (refs.length < 3 ? ' 3개 이상 등록하면 기준이 더 안정적입니다.' : '')),
           filePicker('스윙 영상 선택', { onFiles: run })),
     out,
@@ -169,8 +184,10 @@ async function resultView(s) {
           h('div', { class: 'score' }, String(s.score ?? '-'), h('small', {}, ' / 100')),
           prev && h('div', { class: 'muted' }, `직전 분석(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`)),
         h('div', {}, h('span', { class: 'tag major' }, `교정 필요 ${issues.filter((i) => i.severity === 'major').length}`), h('span', { class: 'tag minor' }, `주의 ${issues.filter((i) => i.severity === 'minor').length}`))),
-      h('p', { class: 'muted' }, isBuiltin(profile)
-        ? '점수는 일반적인 레슨 기준(정석 폼)과 얼마나 비슷한지를 뜻합니다. 기준값은 실제 선수를 측정한 것이 아니라 통상적인 권장 범위이므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
+      h('p', { class: 'muted' }, (s.basis ?? (isBuiltin(profile) ? 'textbook' : 'refs')) === 'textbook'
+        ? '점수는 투어 프로 공개 데이터와 일반적인 레슨 기준(정석 폼)에 얼마나 가까운지를 뜻합니다. 영상으로 보정한 기준이 아니므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
+        : s.basis === 'published'
+        ? `점수는 「${profile}」의 공개된 측정 수치(일부 항목)와 투어 프로 일반 기준에 얼마나 가까운지를 뜻합니다. 선수의 영상을 직접 분석한 기준은 아닙니다.`
         : `점수는 「${profile}」 기준 영상 ${s.refCount}개와 얼마나 비슷한지를 뜻하며, 스윙의 절대적인 좋고 나쁨이 아닙니다.`)),
     h('div', { class: 'card' },
       h('div', { class: 'thumbs' }, PHASE_KEYS.map((k) => h('figure', {}, h('img', { src: s.thumbs[k], alt: PHASES[k] }), PHASES[k]))),
@@ -217,7 +234,8 @@ async function resultView(s) {
 async function renderRefs() {
   const allRefs = await db.getAll('refs');
   const refs = pickRefs(allRefs, state.view, state.profile);
-  const stats = statsFor(allRefs, state.view, state.profile);
+  const basis = basisFor(allRefs, state.view, state.profile);
+  const stats = basis.stats;
   const statsTable = (title, devLabel) => h('div', {}, h('h3', {}, title), h('div', { class: 'card' }, h('table', {},
     h('tr', {}, h('th', {}, '항목'), h('th', {}, '기준'), h('th', {}, devLabel)),
     metricsForView(state.view).filter((m) => stats[m.key]).map((m) =>
@@ -229,10 +247,11 @@ async function renderRefs() {
       profilePicker(allRefs, render),
       h('div', { class: 'card' },
         h('p', {}, '「정석 폼」은 앱에 내장된 기준이라 영상을 등록할 필요가 없습니다.'),
-        h('p', { class: 'muted' }, '골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값이며, 특정 선수를 측정한 것은 아닙니다. 미들 아이언 풀스윙 기준이라 드라이버는 스탠스·어깨 기울기 항목이 다르게 나올 수 있습니다.'),
+        h('p', { class: 'muted' }, '투어 프로를 3D 장비로 측정해 공개한 데이터와, 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다. 미들 아이언 풀스윙 기준이라 드라이버는 스탠스·어깨 기울기 항목이 다르게 나올 수 있습니다.'),
         h('p', { class: 'muted' }, '특정 선수나 내 베스트 스윙을 기준으로 삼고 싶다면 위에서 다른 프로파일을 고르고 영상을 등록하세요.'),
         h('button', { class: 'btn primary', onclick: () => go('analyze') }, '바로 분석하러 가기')),
-      statsTable(`「정석 폼」 ${VIEWS[state.view]} 기준값`, '허용 범위'));
+      statsTable(`「정석 폼」 ${VIEWS[state.view]} 기준값`, '허용 범위'),
+      sourceList());
   }
   const out = h('div');
   const add = async (files) => {
@@ -275,6 +294,11 @@ async function renderRefs() {
           h('button', { class: 'btn small danger', onclick: async () => { if (confirm('이 기준 영상을 삭제할까요?')) { await db.del('refs', r.id); renderRefs(); } } }, '삭제'))))
       : h('p', { class: 'muted' }, '아직 없습니다.'),
     refs.length > 0 && statsTable('학습된 기준값', '편차'),
+    basis.kind === 'published' && [
+      h('div', { class: 'card' }, h('p', {}, '영상을 등록하지 않아도 공개된 측정 수치로 바로 분석할 수 있습니다.'), h('p', { class: 'muted' }, basis.note + ' 영상을 등록하면 그 영상에서 잰 값이 대신 쓰입니다.')),
+      statsTable('공개 수치 + 투어 기준값', '허용 범위'),
+      sourceList(),
+    ],
   );
 }
 
@@ -328,7 +352,7 @@ async function renderHistory() {
 
   const allRefs = await db.getAll('refs');
   const sessions = (await db.getAll('sessions')).filter((s) => s.view === state.view && profileOf(s) === state.profile).sort(byDate);
-  const stats = statsFor(allRefs, state.view, state.profile);
+  const stats = basisFor(allRefs, state.view, state.profile).stats;
   const scored = sessions.filter((s) => s.score != null);
   const metricBox = h('div');
   const select = h('select', { onchange: () => drawMetric() }, metricsForView(state.view).map((m) => h('option', { value: m.key }, `${PHASES[m.phase]} · ${m.label}`)));
@@ -499,5 +523,5 @@ navigator.storage?.persist?.().catch(() => {});
 sync.init();
 // 기준 영상이 하나도 없는 프로파일이 선택돼 있으면 바로 쓸 수 있는 내장 기준으로 시작한다
 db.getAll('refs').then((all) => {
-  if (!isBuiltin(state.profile) && !all.some((r) => profileOf(r) === state.profile)) { state.profile = BUILTIN_PROFILE; savePrefs(); }
+  if (!isBuiltin(state.profile) && !publishedStats(state.profile) && !all.some((r) => profileOf(r) === state.profile)) { state.profile = BUILTIN_PROFILE; savePrefs(); }
 }).catch(() => {}).finally(render);
