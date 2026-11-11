@@ -19,3 +19,8 @@ create policy "golform own rows" on public.golform_records
   for all to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- 프로젝트를 만들 때 "Automatically expose new tables"를 껐더라도 동작하도록 권한을 명시한다.
+-- 로그인하지 않은 방문자(anon)에게는 아무 권한도 주지 않는다.
+revoke all on public.golform_records from anon;
+grant select, insert, update, delete on public.golform_records to authenticated;
