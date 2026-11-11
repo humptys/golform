@@ -33,6 +33,7 @@ function synth(opts = {}) {
     // 오른손잡이를 정면에서 보면 본인의 왼쪽(리드)이 화면 오른쪽
     const L = mirror ? 'R' : 'L', R = mirror ? 'L' : 'R';
     set(LM.NOSE, 0.5 - headSway * sway, 0.27);
+    set(LM[`${L}_EAR`], 0.52 - headSway * sway, 0.26); set(LM[`${R}_EAR`], 0.48 - headSway * sway, 0.26);
     set(LM[`${L}_SH`], 0.56, 0.35); set(LM[`${R}_SH`], 0.44, 0.36);
     set(LM[`${L}_HIP`], 0.53 + hx, 0.55); set(LM[`${R}_HIP`], 0.47 + hx, 0.55);
     set(LM[`${L}_KNEE`], 0.55, 0.7); set(LM[`${R}_KNEE`], 0.45, 0.7);
@@ -240,4 +241,29 @@ test('문구: 한 줄 지시가 모든 항목에 있고 퍼팅은 전용 문구�
   const putt = textFor(metricByKey.fo_head_impact, 'high', 'putter');
   assert.match(putt.title, /공을 따라/);
   assert.equal(textFor(metricByKey.fo_head_impact, 'high', 'iron').title, metricByKey.fo_head_impact.high.title);
+});
+
+test('고개만 돌려 코가 움직여도 머리 이동으로 보지 않는다', () => {
+  const s = synth();
+  const frames = s.frames.map((f) => {
+    if (f.t < 1.2 || f.t > 1.6) return f;
+    const lm = f.lm.map((p) => ({ ...p }));
+    lm[LM.NOSE].x -= 0.06; // 귀는 그대로, 코만 이동
+    return { t: f.t, lm };
+  });
+  const m = analyzeSwing(frames, { aspect: 1, view: 'faceon' }).metrics;
+  assert.ok(Math.abs(m.fo_head_sway_top) < 3, `sway ${m.fo_head_sway_top}`);
+});
+
+test('임팩트는 손이 어드레스 위치로 돌아온 프레임으로 잡는다', () => {
+  const s = synth();
+  // 임팩트 직후 손목 검출이 튀어 속도 최대 지점이 뒤로 밀린 상황
+  const frames = s.frames.map((f) => {
+    if (Math.abs(f.t - 1.9) > 0.02) return f;
+    const lm = f.lm.map((p) => ({ ...p }));
+    lm[LM.L_WR].x += 0.12; lm[LM.R_WR].x += 0.12; lm[LM.L_WR].y += 0.03; lm[LM.R_WR].y += 0.03;
+    return { t: f.t, lm };
+  });
+  const r = analyzeSwing(frames, { aspect: 1, view: 'faceon' });
+  assert.ok(Math.abs(r.times.impact - s.t.impact) <= 0.07, `impact ${r.times.impact}`);
 });

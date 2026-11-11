@@ -100,3 +100,10 @@ details p { font-size: 13px; }
 .lg.dash { height: 0; border-top: 2px dashed #fff; }
 .lg.mine { height: 4px; background: var(--major); border-radius: 2px; }
 .seg.field button { padding: 9px 2px; font-size: 13px; }
+
+.phase-title { margin: 18px 0 4px; font-size: 16px; }
+.phase-title .muted, .phase-title .ok { font-weight: 400; font-size: 13px; }
+.phase .shot-wrap { flex: 0 0 46%; }
+.phase.small .shot-wrap { flex-basis: 30%; }
+.refs { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; margin: 4px 0; }
+.lg.goal { height: 0; border-top: 2px dashed var(--accent); }

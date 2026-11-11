@@ -3,6 +3,7 @@
 
 export const LM = {
   NOSE: 0,
+  L_EAR: 7, R_EAR: 8,
   L_SH: 11, R_SH: 12,
   L_EL: 13, R_EL: 14,
   L_WR: 15, R_WR: 16,
@@ -11,7 +12,7 @@ export const LM = {
   L_ANK: 27, R_ANK: 28,
 };
 const USED = Object.values(LM);
-const SWAP = [[11, 12], [13, 14], [15, 16], [23, 24], [25, 26], [27, 28]];
+const SWAP = [[7, 8], [11, 12], [13, 14], [15, 16], [23, 24], [25, 26], [27, 28]];
 
 export class SwingError extends Error {}
 
@@ -88,6 +89,8 @@ export function prepareFrames(raw, { aspect = 1, leftHanded = false } = {}) {
 const hands = (p) => mid(p[LM.L_WR], p[LM.R_WR]);
 const shMid = (p) => mid(p[LM.L_SH], p[LM.R_SH]);
 const hipMid = (p) => mid(p[LM.L_HIP], p[LM.R_HIP]);
+// 머리 위치는 양 귀의 중점으로 잡는다. 코는 고개를 돌리거나 숙이기만 해도 크게 움직여 머리 이동으로 오인된다.
+const head = (p) => mid(p[LM.L_EAR], p[LM.R_EAR]);
 const median = (a) => {
   const s = [...a].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)];
@@ -148,11 +151,16 @@ export function detectPhases(frames, { club = 'iron' } = {}) {
   if (address < 0) address = argBest(idxAt(t[top] - 1.5), top - 1, (i) => h[i][1]);
   if (address < 0 || address >= top) fail();
 
-  let finish = argBest(idxAt(t[impact] + 0.15), idxAt(t[impact] + 2.5), (i) => -h[i][1]);
-  if (finish <= impact) finish = n - 1;
-  if (finish <= impact) fail();
+  // 임팩트 보정: 임팩트 순간 손은 어드레스 때 위치로 돌아온다. 속도 최대 지점은 모션 블러로 흔들리기 쉬우므로
+  // 탑 이후 손이 어드레스 위치에 가장 가까워지는 프레임을 임팩트로 삼는다(폴로스루로 넘어가지 않게 범위를 제한).
+  const refined = argBest(top + 1, idxAt(t[impact] + 0.12), (i) => -dist(h[i], h[address]));
+  const impactFinal = refined > top ? refined : impact;
 
-  return { address, top, impact, finish };
+  let finish = argBest(idxAt(t[impactFinal] + 0.15), idxAt(t[impactFinal] + 2.5), (i) => -h[i][1]);
+  if (finish <= impactFinal) finish = n - 1;
+  if (finish <= impactFinal) fail();
+
+  return { address, top, impact: impactFinal, finish };
 }
 
 /**
@@ -222,7 +230,7 @@ export function computeMetrics(frames, ph, view) {
   m.tempo = back / Math.max(1e-6, down);
 
   const leadArm = (p) => angle3(p[LM.L_SH], p[LM.L_EL], p[LM.L_WR]);
-  const headLift = (p) => (-(p[LM.NOSE][1] - A[LM.NOSE][1]) / torso) * 100;
+  const headLift = (p) => (-(head(p)[1] - head(A)[1]) / torso) * 100;
 
   if (view === 'faceon') {
     // 정면: 오른손잡이 기준 타깃 방향 = 화면 오른쪽(+x)
@@ -231,14 +239,14 @@ export function computeMetrics(frames, ph, view) {
     const turn = (p, l, r) => deg(Math.acos(clamp((p[l][0] - p[r][0]) / (A[l][0] - A[r][0]), -1, 1)));
     m.fo_stance = dist(A[LM.L_ANK], A[LM.R_ANK]) / shW;
     m.fo_shoulder_tilt_addr = deg(Math.atan2(A[LM.R_SH][1] - A[LM.L_SH][1], Math.abs(A[LM.L_SH][0] - A[LM.R_SH][0])));
-    m.fo_head_sway_top = pctX(T[LM.NOSE], A[LM.NOSE]);
+    m.fo_head_sway_top = pctX(head(T), head(A));
     m.fo_hip_sway_top = pctX(hipMid(T), hipMid(A));
     m.fo_shoulder_turn_top = turn(T, LM.L_SH, LM.R_SH);
     m.fo_hip_turn_top = turn(T, LM.L_HIP, LM.R_HIP);
     m.fo_lead_arm_top = leadArm(T);
     m.fo_head_lift_top = headLift(T);
     m.fo_hip_shift_impact = pctX(hipMid(I), hipMid(A));
-    m.fo_head_impact = pctX(I[LM.NOSE], A[LM.NOSE]);
+    m.fo_head_impact = pctX(head(I), head(A));
     m.fo_lead_arm_impact = leadArm(I);
     m.fo_hands_fwd_impact = pctX(hands(I), hands(A));
     m.fo_finish_weight = pctX(hipMid(F), F[LM.L_ANK]);

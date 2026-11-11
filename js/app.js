@@ -3,7 +3,8 @@ import { PHASES, VIEWS, CLUBS, metricByKey, metricsForView, fmt, textFor } from 
 import { buildStats, evaluate } from './profile.js';
 import { extractPoses } from './pose.js';
 import { lessonLink, playerLink, searchLink } from './links.js';
-import { drawPhase, drawSkeleton, PHASE_OF } from './annotate.js';
+import { drawShot, drawSkeleton, PHASE_OF } from './annotate.js';
+import { sourcesFor } from './sources.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -90,7 +91,7 @@ function progressCard() {
 }
 const errorCard = (e) => h('div', { class: 'card err' }, e?.message || String(e));
 
-const JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const JOINTS = [0, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
 const round4 = (v) => Math.round(v * 1e4) / 1e4;
 
 /** 네 구간의 관절이 모두 들어오도록 사람 주변만 잘라낼 영역(0~1 비율). 구간끼리 위치를 비교할 수 있게 같은 영역을 쓴다. */
@@ -214,39 +215,41 @@ async function renderAnalyze() {
   );
 }
 
-/** 구간 사진에 골격과 교정 표시를 그린 canvas. 누르면 크게 본다. */
-function phaseCanvas(s, phase, items) {
+/** 구간 사진 한 장. item이 있으면 그 문제 하나만 표시한다. 누르면 크게 본다. */
+function shotCanvas(s, phase, item) {
   const canvas = h('canvas', { class: 'shot', onclick: (e) => e.target.closest('.phase')?.classList.toggle('zoom') });
+  const m = item && metricByKey[item.key];
   const img = new Image();
-  img.onload = () => {
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const g = canvas.getContext('2d');
-    g.drawImage(img, 0, 0);
-    drawPhase(g, img.width, img.height, s.pose, phase, items, { leftHanded: s.leftHanded });
-  };
+  img.onload = () => drawShot(canvas, img, s.pose, phase, item, {
+    leftHanded: s.leftHanded,
+    fmtValue: (v) => (m ? v.toFixed(m.digits) + (m.unit === '°' ? '°' : '') : String(Math.round(v))),
+  });
   img.src = s.shots[phase];
   return canvas;
 }
 
-/** 사진 옆에 붙는 메모 한 건: 무엇이 문제인지와 어떻게 할지 한 줄씩. 긴 설명은 접어 둔다. */
+/** 사진 옆에 붙는 메모 한 건: 무엇이 문제인지와 어떻게 할지 한 줄씩, 그리고 출처·참고 영상 링크. 긴 설명은 접어 둔다. */
 function noteItem(s, i) {
   const m = metricByKey[i.key];
   if (!m) return null;
   const club = clubOf(s), profile = profileOf(s);
   const t = textFor(m, i.side, club);
   const lesson = club === 'approach' || club === 'putter' ? searchLink(`골프 ${CLUBS[club]} ${t.cue} 레슨`) : lessonLink(i.key, i.side);
+  const src = sourcesFor(i.key, i.side, { club, profile: s.basis === 'published' ? profile : null });
   return h('div', { class: `note ${i.severity}` },
     h('div', { class: 'note-head' }, h('span', { class: 'num' }, String(i.n)), h('b', {}, t.title)),
     h('div', { class: 'cue' }, '→ ' + t.cue),
+    h('div', { class: 'refs' },
+      lesson && extLink(lesson, '▶ 참고 영상'),
+      src.fault && extLink(src.fault.url, '출처: ' + src.fault.label),
+      src.basis && extLink(src.basis.url, '기준 데이터: ' + src.basis.label),
+      profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, s.view), `▶ ${profile} 스윙`)),
     h('details', {}, h('summary', {}, '자세히'),
       h('p', { class: 'nums' }, m.label, ': 내 값 ', h('b', {}, fmt(m, i.value)), ' · 기준 ', h('b', {}, fmt(m, i.mean)), ` (±${i.tol.toFixed(m.digits)})`),
       h('p', {}, h('b', {}, '왜 문제인가 '), t.why),
       h('p', {}, h('b', {}, '교정 '), t.fix),
       t.drill && h('p', {}, h('b', {}, '연습법 '), t.drill),
-      h('p', { class: 'links' },
-        lesson && extLink(lesson, '▶ 레슨 영상 찾기'),
-        profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, s.view), `▶ ${profile} 스윙 보기`))));
+      h('p', { class: 'nums' }, '기준값 근거: ', src.basis ? extLink(src.basis.url, src.basis.label) : (s.basis === 'refs' ? '등록한 기준 영상의 측정값' : '일반적인 레슨 기준 (측정 데이터 아님)'))));
 }
 
 async function resultView(s) {
@@ -287,16 +290,17 @@ async function resultView(s) {
   if (s.shots && s.pose) {
     el.append(
       h('h2', {}, issues.length ? '사진으로 보는 교정 포인트' : '기준과 큰 차이가 없습니다'),
-      h('p', { class: 'legend' }, h('span', { class: 'lg band' }), '기준 범위 ', h('span', { class: 'lg dash' }), '기준 자세 ', h('span', { class: 'lg mine' }), '내 자세 ', '➜ 옮길 방향'),
-      h('p', { class: 'muted' }, '사진을 누르면 커집니다. 골격선이 몸에서 벗어나 있거나 구간이 실제와 다르면 그 구간의 지적은 믿지 마세요.'));
+      h('p', { class: 'legend' }, h('span', { class: 'lg mine' }), '지금 내 자세 ', h('span', { class: 'lg goal' }), '목표 ', '➜ 옮길 방향 · 사진을 누르면 커집니다'));
     for (const phase of PHASE_KEYS) {
       const items = issues.filter((i) => PHASE_OF[i.key] === phase);
-      el.append(h('div', { class: 'card phase' },
-        h('div', { class: 'shot-wrap' }, phaseCanvas(s, phase, items), h('div', { class: 'phase-name' }, PHASES[phase])),
-        h('div', { class: 'notes' }, items.length ? items.map((i) => noteItem(s, i)) : h('p', { class: 'ok' }, '✓ 기준과 비슷합니다'))));
+      el.append(h('h3', { class: 'phase-title' }, PHASES[phase], items.length ? h('span', { class: 'muted' }, ` 교정 ${items.length}가지`) : h('span', { class: 'ok' }, ' ✓ 기준과 비슷합니다')));
+      if (!items.length) el.append(h('div', { class: 'card phase small' }, h('div', { class: 'shot-wrap' }, shotCanvas(s, phase, null)), h('div', { class: 'notes muted' }, '골격선이 몸 위에 잘 놓였는지 확인하세요.')));
+      // 사진 한 장에 문제 하나씩
+      for (const i of items) el.append(h('div', { class: 'card phase' }, h('div', { class: 'shot-wrap' }, shotCanvas(s, phase, i)), h('div', { class: 'notes' }, noteItem(s, i))));
     }
     const rest = issues.filter((i) => !PHASE_OF[i.key]);
-    if (rest.length) el.append(h('div', { class: 'card' }, h('h3', {}, '리듬'), h('div', { class: 'notes' }, rest.map((i) => noteItem(s, i)))));
+    if (rest.length) el.append(h('h3', { class: 'phase-title' }, '리듬'), h('div', { class: 'card' }, h('div', { class: 'notes' }, rest.map((i) => noteItem(s, i)))));
+    el.append(h('p', { class: 'muted' }, '골격선이 몸에서 벗어나 있거나 사진이 실제 구간과 다르면 그 구간의 지적은 믿지 마세요.'));
   } else {
     // 사진 좌표가 저장되지 않은 예전 기록
     el.append(
