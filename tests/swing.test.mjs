@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { LM, analyzeSwing, prepareFrames, detectPhases, angle3, SwingError } from '../js/swing.js';
 import { buildStats, evaluate } from '../js/profile.js';
 import { METRICS, metricsForView } from '../js/metrics.js';
+import { textbookStats, TEXTBOOK_KEYS } from '../js/textbook.js';
 
 const FPS = 30;
 const lerp = (a, b, u) => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
@@ -137,5 +138,22 @@ test('모든 항목에 양방향 교정 문구가 있다', () => {
     keys.add(m.key);
     for (const side of ['low', 'high']) for (const f of ['title', 'why', 'fix']) assert.ok(m[side][f], `${m.key}.${side}.${f}`);
     assert.ok(m.floor > 0);
+  }
+});
+
+test('내장 기준(정석 폼)은 모든 항목을 덮고, 기준과 같은 값이면 100점이다', () => {
+  assert.deepEqual([...TEXTBOOK_KEYS].sort(), METRICS.map((m) => m.key).sort());
+  const stats = textbookStats();
+  for (const view of ['faceon', 'dtl']) {
+    const ideal = Object.fromEntries(metricsForView(view).map((m) => [m.key, stats[m.key].mean]));
+    const ev = evaluate(ideal, stats, view);
+    assert.equal(ev.score, 100);
+    assert.equal(ev.items.length, metricsForView(view).length);
+    // 얼리 익스텐션처럼 크게 벗어난 값은 지적된다
+    if (view === 'dtl') {
+      const bad = evaluate({ ...ideal, dtl_hip_thrust_impact: 15, dtl_spine_change_impact: -16 }, stats, view);
+      assert.deepEqual(bad.issues.map((i) => i.key).sort(), ['dtl_hip_thrust_impact', 'dtl_spine_change_impact']);
+      assert.ok(bad.issues.every((i) => i.severity === 'major'));
+    }
   }
 });
