@@ -58,7 +58,7 @@ video.replay { width: 100%; max-height: 60vh; border-radius: 12px; background: #
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 td, th { padding: 7px 4px; border-bottom: 1px solid var(--line); text-align: right; }
 td:first-child, th:first-child { text-align: left; }
-th { color: var(--muted); font-weight: 400; }
+th { color: var(--muted); font-weight: 400; white-space: nowrap; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .dot.good { background: var(--good); } .dot.minor { background: var(--minor); } .dot.major { background: var(--major); }
 
@@ -69,3 +69,10 @@ th { color: var(--muted); font-weight: 400; }
 svg.chart { width: 100%; height: auto; display: block; }
 ol, ul { padding-left: 20px; margin: 6px 0; }
 li { margin: 4px 0; }
+
+input[type=text], input[type=url], input[type=email], input[type=password] { display: block; width: 100%; padding: 12px; margin: 8px 0; border-radius: 10px; background: #213328; color: var(--text); border: 1px solid var(--line); font-size: 16px; }
+.field { margin: 10px 0; }
+.field select { width: 100%; }
+.bad { color: var(--major); font-size: 13px; }
+a { color: var(--accent); }
+.links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; margin-top: 10px; }
