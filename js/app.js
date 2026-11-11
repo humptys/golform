@@ -10,6 +10,7 @@ import { readShotImage } from './ocr.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
+import { VERSION } from './version.js';
 
 const PHASE_KEYS = ['address', 'top', 'impact', 'finish'];
 const SEV = { good: '양호', minor: '주의', major: '교정 필요' };
@@ -760,6 +761,7 @@ async function renderSettings() {
   state.onSyncStatus = null;
   mount(
     h('h2', {}, '설정'),
+    h('p', { class: 'muted' }, `앱 버전 v${VERSION}. 새 기능이 안 보이면 이 번호가 안내받은 번호와 같은지 확인하고, 다르면 잠시 뒤 새로고침하세요.`),
     await syncCard(),
     await backupCard(),
     h('h2', {}, '사용 방법'),
@@ -810,6 +812,7 @@ window.addEventListener('golform-sync', (e) => {
   if (e.detail?.changed && !state.busy && state.tab !== 'settings' && !state.detail) render();
 });
 navigator.storage?.persist?.().catch(() => {});
+document.querySelector('header .sub')?.append(` · v${VERSION}`);
 sync.init();
 // 기준 영상이 하나도 없는 프로파일이 선택돼 있으면 바로 쓸 수 있는 내장 기준으로 시작한다
 db.getAll('refs').then((all) => {
