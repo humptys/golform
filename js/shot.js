@@ -36,46 +36,90 @@ export function buildShot(raw) {
 
 export const fmtShot = (f, v) => (f.key === 'side' ? `${v >= 0 ? 'R' : 'L'}${Math.abs(v)}` : String(v)) + f.unit;
 
+// 구질·탄도의 각 특징과 흔히 함께 나타나는 자세 문제, 그리고 그 자세가 왜 그런 공을 만드는지.
+// 키는 '측정항목:방향'(low = 기준보다 작음, high = 큼)이며 자세 분석의 지적과 맞춰 본다.
+const CAUSES = {
+  push: {
+    'fo_hip_shift_impact:high': '골반이 타깃 쪽으로 밀리면 클럽이 뒤처져 페이스가 열린 채 맞습니다.',
+    'dtl_hip_thrust_impact:high': '골반이 공 쪽으로 나오면 팔이 지나갈 공간이 막혀 클럽이 안에서 밖으로 밀려 나갑니다.',
+    'dtl_spine_change_impact:low': '상체가 일어서면 클럽이 안에서 밖으로 밀려 나갑니다.',
+    'fo_head_impact:low': '상체가 뒤로 젖혀지면 궤도가 안에서 밖으로 치우칩니다.',
+  },
+  pull: {
+    'fo_shoulder_turn_top:low': '백스윙 회전이 부족하면 다운스윙을 상체로 시작해 클럽이 밖에서 안으로 들어옵니다.',
+    'fo_hip_shift_impact:low': '체중이 뒤에 남으면 상체가 먼저 돌아 공을 당겨 칩니다.',
+    'fo_finish_weight:low': '체중이 앞으로 넘어가지 못하면 상체로 당겨 치게 됩니다.',
+    'fo_head_impact:high': '상체가 타깃 쪽으로 덮치면 클럽이 밖에서 안으로 들어옵니다.',
+  },
+  draw: {
+    'dtl_hip_thrust_impact:high': '골반이 공 쪽으로 나오면 궤도가 인-아웃이 되고, 손으로 페이스를 닫아 보상하게 됩니다.',
+    'fo_hands_fwd_impact:low': '손목이 일찍 풀리면 페이스가 빨리 닫혀 공이 감깁니다.',
+    'fo_hip_shift_impact:low': '체중이 뒤에 남으면 몸 회전이 멈추고 손이 뒤집혀 페이스가 닫힙니다.',
+    'fo_finish_weight:low': '체중이 뒤에 남은 채 손으로 치면 페이스가 닫힙니다.',
+    'fo_head_impact:low': '상체가 뒤에 남으면 손이 먼저 돌아 페이스가 닫힙니다.',
+  },
+  fade: {
+    'fo_lead_arm_impact:low': '임팩트 때 앞팔이 굽으면(치킨 윙) 페이스가 열린 채 맞습니다.',
+    'fo_shoulder_turn_top:low': '백스윙 회전이 부족하면 궤도가 아웃-인이 되어 공이 깎여 맞습니다.',
+    'fo_hip_shift_impact:low': '체중이 뒤에 남으면 상체가 먼저 열려 공을 깎아 칩니다.',
+    'fo_head_impact:high': '상체가 타깃 쪽으로 덮치면 아웃-인 궤도로 깎여 맞습니다.',
+  },
+  highLaunch: {
+    'fo_hip_shift_impact:low': '체중이 뒤에 남으면 클럽이 로프트가 누운 채 맞아 공이 높이 뜹니다.',
+    'fo_finish_weight:low': '체중이 뒤에 남으면 올려 치게 되어 공이 높이 뜹니다.',
+    'fo_hands_fwd_impact:low': '손목이 일찍 풀리면 로프트가 누워 공이 높이 뜹니다.',
+    'fo_head_impact:low': '상체가 뒤로 젖혀지면 올려 치는 각도가 커집니다.',
+  },
+  lowLaunch: {
+    'fo_hands_fwd_impact:high': '손이 지나치게 앞서면 로프트가 세워져 낮게 출발합니다.',
+    'fo_head_impact:high': '상체가 공보다 앞서 나가면 찍어 쳐서 낮게 출발합니다.',
+    'fo_hip_shift_impact:high': '몸이 타깃 쪽으로 밀리면 로프트가 세워진 채 맞습니다.',
+  },
+  highSpin: {
+    'fo_hands_fwd_impact:low': '손목이 일찍 풀리면 로프트가 누워 스핀이 늘어납니다.',
+    'fo_lead_arm_impact:low': '앞팔이 굽어 깎여 맞으면 스핀이 늘어납니다.',
+    'fo_head_impact:high': '상체가 덮치며 가파르게 내려오면 스핀이 늘어납니다.',
+  },
+};
+
 /**
- * @returns {name, lines: [문장], related: ['metricKey:side'], hasShape}
+ * 샷의 특징을 뽑는다.
+ * @returns {name, findings: [{id, label, text, causes}], summary: [문장], hasShape}
  * 방향 부호: 좌우방향각·좌우거리는 오른쪽이 +, 사이드스핀은 GDR 표시대로 음수가 왼쪽으로 휘는 회전.
  */
 export function analyzeShot(shot, { club = 'iron', leftHanded = false } = {}) {
   const hand = leftHanded ? -1 : 1;
   const pushSide = leftHanded ? '왼쪽' : '오른쪽';
   const pullSide = leftHanded ? '오른쪽' : '왼쪽';
-  const lines = [];
-  const related = new Set();
-  const add = (...keys) => keys.forEach((k) => related.add(k));
+  const findings = [];
+  const summary = [];
+  const find = (id, label, text, causes = null) => findings.push({ id, label, text, causes: causes ? CAUSES[causes] : {} });
   let start = null, curve = null;
 
   if (shot.dir != null) {
     const d = shot.dir * hand; // + = 푸시 방향
     start = d >= 2 ? 'push' : d <= -2 ? 'pull' : 'straight';
-    if (start === 'push') {
-      lines.push(`공이 타깃보다 ${pushSide}으로 ${Math.abs(shot.dir)}° 출발했습니다. 임팩트 순간 클럽 페이스가 ${pushSide}을 보고 있었습니다.`);
-      add('fo_hip_shift_impact:high', 'dtl_hip_thrust_impact:high', 'dtl_spine_change_impact:low', 'fo_head_impact:low');
-    } else if (start === 'pull') {
-      lines.push(`공이 타깃보다 ${pullSide}으로 ${Math.abs(shot.dir)}° 출발했습니다. 임팩트 순간 클럽 페이스가 ${pullSide}을 보고 있었습니다.`);
-      add('fo_shoulder_turn_top:low', 'fo_hip_shift_impact:low', 'fo_head_impact:high', 'fo_finish_weight:low');
-    } else {
-      lines.push('공이 타깃 방향으로 거의 똑바로 출발했습니다.');
-    }
+    if (start === 'push') find('start', `${pushSide}으로 ${Math.abs(shot.dir)}° 출발 (푸시)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pushSide}을 보고 있었습니다.`, 'push');
+    else if (start === 'pull') find('start', `${pullSide}으로 ${Math.abs(shot.dir)}° 출발 (풀)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pullSide}을 보고 있었습니다.`, 'pull');
+    else find('start', '타깃 방향으로 똑바로 출발', '임팩트 순간 클럽 페이스가 타깃을 향했습니다.');
   }
   if (shot.sideSpin != null) {
     const sp = shot.sideSpin * hand; // 음수 = 드로우 방향
     const tilt = shot.backSpin ? (Math.atan(Math.abs(sp) / shot.backSpin) * 180) / Math.PI : null; // 회전축 기울기
     const big = tilt != null ? tilt > 25 : Math.abs(sp) > 1200;
     curve = Math.abs(sp) < 300 ? 'straight' : sp < 0 ? (big ? 'hook' : 'draw') : big ? 'slice' : 'fade';
-    if (curve === 'draw' || curve === 'hook') {
-      lines.push(`날아가면서 ${pullSide}으로 ${curve === 'hook' ? '크게 ' : ''}휘었습니다. 스윙 궤도가 페이스 방향보다 더 ${pushSide}(인-아웃)으로 지나갔습니다.`);
-      if (curve === 'hook') add('fo_hands_fwd_impact:low', 'fo_hip_shift_impact:low', 'fo_head_impact:low');
-      add('dtl_hip_thrust_impact:high');
-    } else if (curve === 'fade' || curve === 'slice') {
-      lines.push(`날아가면서 ${pushSide}으로 ${curve === 'slice' ? '크게 ' : ''}휘었습니다. 스윙 궤도가 페이스 방향보다 더 ${pullSide}(아웃-인)으로 지나갔습니다.`);
-      add('fo_lead_arm_impact:low', 'fo_shoulder_turn_top:low', 'fo_hip_shift_impact:low', 'fo_head_impact:high');
-    } else {
-      lines.push('옆 회전이 적어 거의 휘지 않았습니다.');
+    if (curve === 'draw' || curve === 'hook') find('curve', `${pullSide}으로 ${curve === 'hook' ? '크게 ' : ''}휨 (${curve === 'hook' ? '훅' : '드로우'})`, `스윙 궤도가 페이스 방향보다 더 ${pushSide}으로(인-아웃) 지나갔습니다.`, 'draw');
+    else if (curve === 'fade' || curve === 'slice') find('curve', `${pushSide}으로 ${curve === 'slice' ? '크게 ' : ''}휨 (${curve === 'slice' ? '슬라이스' : '페이드'})`, `스윙 궤도가 페이스 방향보다 더 ${pullSide}으로(아웃-인) 지나갔습니다.`, 'fade');
+    else find('curve', '거의 휘지 않음', '옆 회전이 적었습니다.');
+  }
+  if (club === 'driver') {
+    if (shot.launch != null) {
+      if (shot.launch > 16) find('launch', `발사각 ${shot.launch}° (높음)`, '드라이버는 보통 10~16°입니다. 공이 높이 떠서 비거리를 손해 볼 수 있습니다.', 'highLaunch');
+      else if (shot.launch < 9) find('launch', `발사각 ${shot.launch}° (낮음)`, '드라이버는 보통 10~16°입니다. 캐리가 줄어듭니다.', 'lowLaunch');
+    }
+    if (shot.backSpin != null) {
+      if (shot.backSpin > 3200) find('spin', `백스핀 ${shot.backSpin}rpm (많음)`, '드라이버는 보통 1800~3000rpm입니다. 공이 떠올라 비거리가 줄어듭니다.', 'highSpin');
+      else if (shot.backSpin < 1700) find('spin', `백스핀 ${shot.backSpin}rpm (적음)`, '드라이버는 보통 1800~3000rpm입니다. 공이 일찍 떨어질 수 있습니다.');
     }
   }
 
@@ -88,22 +132,31 @@ export function analyzeShot(shot, { club = 'iron', leftHanded = false } = {}) {
 
   if (shot.side != null && shot.carry) {
     const pct = (Math.abs(shot.side) / shot.carry) * 100;
-    lines.push(`결과적으로 타깃에서 ${shot.side >= 0 ? '오른쪽' : '왼쪽'}으로 ${Math.abs(shot.side)}m 떨어졌습니다. ` + (pct < 3 ? '거리 대비 방향은 좋은 편입니다.' : pct < 7 ? '방향 편차가 다소 있습니다.' : '방향 편차가 큽니다.'));
+    summary.push(`타깃에서 ${shot.side >= 0 ? '오른쪽' : '왼쪽'}으로 ${Math.abs(shot.side)}m 떨어졌습니다. ` + (pct < 3 ? '거리 대비 방향은 좋은 편입니다.' : pct < 7 ? '방향 편차가 다소 있습니다.' : '방향 편차가 큽니다.'));
     if (pct < 3 && start && start !== 'straight' && curve && curve !== 'straight') {
-      lines.push('출발 방향과 휘는 방향이 서로 상쇄되어 맞은 샷입니다. 둘 중 하나만 달라져도 크게 벗어날 수 있습니다.');
+      summary.push('출발 방향과 휘는 방향이 서로 상쇄되어 맞은 샷입니다. 둘 중 하나만 달라져도 크게 벗어날 수 있습니다.');
     }
   }
-
-  if (club === 'driver') {
-    if (shot.launch != null) {
-      if (shot.launch > 16) { lines.push(`발사각 ${shot.launch}°는 드라이버로는 높은 편입니다(보통 10~16°).`); add('fo_hip_shift_impact:low', 'fo_finish_weight:low'); }
-      else if (shot.launch < 9) lines.push(`발사각 ${shot.launch}°는 드라이버로는 낮은 편입니다(보통 10~16°). 캐리가 줄어듭니다.`);
-    }
-    if (shot.backSpin != null) {
-      if (shot.backSpin > 3200) { lines.push(`백스핀 ${shot.backSpin}rpm은 드라이버로는 많은 편입니다(보통 1800~3000). 공이 떠서 비거리가 줄어듭니다.`); add('fo_hands_fwd_impact:low', 'fo_lead_arm_impact:low'); }
-      else if (shot.backSpin < 1700) lines.push(`백스핀 ${shot.backSpin}rpm은 적은 편입니다(보통 1800~3000). 공이 일찍 떨어질 수 있습니다.`);
-    }
-  }
-
-  return { name, lines, related: [...related], hasShape: !!(start || curve) };
+  return { name, findings, summary, hasShape: !!(start || curve) };
 }
+
+/**
+ * 샷의 특징과 자세 분석의 지적을 잇는다.
+ * @param issues 자세 분석에서 나온 지적 [{n, key, side, ...}]
+ * @returns analyzeShot 결과 + findings[].matched [{issue, why}] + links: '항목:방향' -> [샷 특징 이름]
+ */
+export function diagnose(shot, issues, opts = {}) {
+  const r = analyzeShot(shot, opts);
+  const links = new Map();
+  for (const f of r.findings) {
+    f.matched = issues.filter((i) => f.causes[`${i.key}:${i.side}`]).map((i) => ({ issue: i, why: f.causes[`${i.key}:${i.side}`] }));
+    for (const m of f.matched) {
+      const k = `${m.issue.key}:${m.issue.side}`;
+      links.set(k, [...(links.get(k) ?? []), f.label]);
+    }
+  }
+  return { ...r, links };
+}
+
+/** 방향 정확도: 캐리 대비 좌우로 벗어난 비율(%). 작을수록 좋다. */
+export const sidePercent = (shot) => (shot?.side != null && shot.carry ? (Math.abs(shot.side) / shot.carry) * 100 : null);

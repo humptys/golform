@@ -269,7 +269,7 @@ test('임팩트는 손이 어드레스 위치로 돌아온 프레임으로 잡�
 });
 
 test('샷 데이터: 입력 해석과 구질 판정', async () => {
-  const { parseShotValue, buildShot, analyzeShot } = await import('../js/shot.js');
+  const { parseShotValue, buildShot, analyzeShot, diagnose, sidePercent } = await import('../js/shot.js');
   assert.equal(parseShotValue('R3.3'), 3.3);
   assert.equal(parseShotValue('L 2'), -2);
   assert.equal(parseShotValue('-735'), -735);
@@ -281,15 +281,29 @@ test('샷 데이터: 입력 해석과 구질 판정', async () => {
   const shot = buildShot({ total: '219', carry: '202', side: 'R3.3', apex: '31.7', ballSpeed: '61.3', launch: '18', dir: '7.1', backSpin: '1966', sideSpin: '-735' });
   const r = analyzeShot(shot, { club: 'driver' });
   assert.equal(r.name, '푸시 드로우');
-  assert.ok(r.lines.some((l) => l.includes('상쇄')));
-  assert.ok(r.lines.some((l) => l.includes('발사각 18°')));
-  assert.ok(r.related.includes('fo_hip_shift_impact:high'));
+  assert.deepEqual(r.findings.map((f) => f.id), ['start', 'curve', 'launch']);
+  assert.ok(r.summary.some((l) => l.includes('상쇄')));
+  assert.ok(Math.abs(sidePercent(shot) - 1.63) < 0.01);
   // 왼손잡이에게 같은 숫자는 풀 페이드
   assert.equal(analyzeShot(shot, { club: 'driver', leftHanded: true }).name, '풀 페이드');
-  // 회전축이 크게 기울면 슬라이스
   assert.equal(analyzeShot({ dir: 0.5, backSpin: 2500, sideSpin: 1600 }, {}).name, '슬라이스');
   assert.equal(analyzeShot({ dir: -4 }, {}).name, '풀');
   assert.equal(analyzeShot({ carry: 150 }, {}).hasShape, false);
+
+  // 자세 지적과 연결: 골반 슬라이드는 푸시의 원인 후보, 체중이 뒤에 남는 것은 높은 발사각의 원인 후보
+  const issues = [
+    { n: 1, key: 'fo_hip_shift_impact', side: 'high' },
+    { n: 2, key: 'fo_finish_weight', side: 'low' },
+    { n: 3, key: 'fo_stance', side: 'low' },
+  ];
+  const d = diagnose(shot, issues, { club: 'driver' });
+  const by = Object.fromEntries(d.findings.map((f) => [f.id, f.matched.map((m) => m.issue.n)]));
+  assert.deepEqual(by.start, [1]);
+  assert.deepEqual(by.curve, [2]);
+  assert.deepEqual(by.launch, [2]);
+  assert.ok(d.findings[0].matched[0].why.includes('페이스가 열린'));
+  assert.deepEqual(d.links.get('fo_finish_weight:low').length, 2);
+  assert.equal(d.links.has('fo_stance:low'), false);
 });
 
 test('촬영 방향 자동 인식: 어깨와 골반이 벌어져 보이면 정면, 겹쳐 보이면 측면', () => {
@@ -310,4 +324,15 @@ test('촬영 방향 자동 인식: 어깨와 골반이 벌어져 보이면 정�
   assert.equal(dtl.view, 'dtl');
   assert.ok(Number.isFinite(dtl.metrics.dtl_spine_addr));
   assert.equal(analyzeSwing(s.frames, { aspect: 1, view: 'faceon' }).view, 'faceon');
+});
+
+test('캡처 숫자 읽기: 두 번 읽은 결과를 합쳐 7과 소수점을 모두 살린다', async () => {
+  const { mergeReads } = await import('../js/ocr.js');
+  assert.deepEqual(mergeReads('219', '219'), { text: '219', agree: true });
+  assert.deepEqual(mergeReads('7.1', '1.1'), { text: '7.1', agree: false });
+  assert.deepEqual(mergeReads('-735', '-135'), { text: '-735', agree: false });
+  assert.deepEqual(mergeReads('R33', 'R3.3'), { text: 'R3.3', agree: false });
+  assert.deepEqual(mergeReads('317', '31.7'), { text: '31.7', agree: false });
+  assert.deepEqual(mergeReads('71', '1.1'), { text: '7.1', agree: false });
+  assert.equal(mergeReads('12', '1234').agree, false);
 });

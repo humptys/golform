@@ -121,3 +121,12 @@ details p { font-size: 13px; }
 .chip { font-size: 12px; padding: 3px 8px; border-radius: 99px; background: #213328; color: var(--muted); }
 .chip b { color: var(--text); }
 details.card > summary { font-size: 15px; color: var(--text); }
+
+.finding { border-top: 1px solid var(--line); padding: 10px 0; }
+.finding-head { font-weight: 800; font-size: 16px; }
+.cause { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; font-size: 14px; }
+.cause.major .num { background: var(--major); }
+.cause .why { color: var(--muted); font-size: 13px; }
+.impact { font-size: 13px; color: var(--minor); margin: 2px 0; }
+input.unsure { border-color: var(--minor); box-shadow: 0 0 0 1px var(--minor); }
+.btn.start { display: block; width: 100%; font-size: 17px; padding: 15px; margin: 10px 0; }
