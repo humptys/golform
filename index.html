@@ -24,6 +24,14 @@
     <button data-tab="refs">기준 영상</button>
     <button data-tab="settings">설정</button>
   </nav>
+  <script>
+    // 서비스 워커가 처음 자리 잡으면 한 번 새로고침해, 브라우저가 붙잡고 있던 예전 파일 대신 최신 파일로 다시 연다.
+    if ('serviceWorker' in navigator) {
+      var hadWorker = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+      if (!hadWorker) navigator.serviceWorker.addEventListener('controllerchange', function () { location.reload(); }, { once: true });
+    }
+  </script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
