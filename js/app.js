@@ -624,7 +624,8 @@ async function renderHistory() {
   const scored = sessions.filter((s) => s.score != null);
   const metricBox = h('div');
   // 샷 데이터는 촬영 방향이나 기준과 무관하므로 같은 클럽의 모든 기록을 모아 본다
-  const shots = (await db.getAll('sessions')).filter((s) => s.shot && clubOf(s) === state.club).sort(byDate);
+  const allShots = (await db.getAll('sessions')).filter((s) => s.shot);
+  const shots = allShots.filter((s) => clubOf(s) === state.club).sort(byDate);
   const SHOT_SERIES = [
     ...SHOT_FIELDS.map((f) => ({ key: f.key, label: `${f.label} (${f.unit})`, get: (s) => s.shot[f.key], note: f.signed ? '오른쪽 +, 왼쪽 −. 0에 가까울수록 똑바릅니다.' : '' })),
     { key: 'sidePct', label: '방향 편차 (캐리 대비 %)', get: (s) => sidePercent(s.shot), note: '좌우로 벗어난 거리 ÷ 캐리. 작을수록 정확합니다.' },
@@ -654,14 +655,61 @@ async function renderHistory() {
       h('p', { class: 'muted' }, st ? `초록 띠가 기준 범위(${fmt(m, st.mean)} ±${tol.toFixed(m.digits)})입니다. 점이 띠 안으로 들어올수록 기준에 가까워진 것입니다.` : '기준 영상이 없어 범위를 표시할 수 없습니다.'));
   }
 
+  /** 샷 추이 카드: 핵심 지표가 처음보다 나아졌는지 한눈에 보여 주고, 항목별 그래프는 펼쳐서 본다. */
+  function shotCard() {
+    const title = h('h3', {}, `샷 추이 · ${CLUBS[state.club]}`);
+    if (!shots.length) {
+      const others = Object.entries(CLUBS).map(([k, label]) => [label, allShots.filter((s) => clubOf(s) === k).length]).filter(([, n]) => n > 0);
+      return h('div', { class: 'card' }, title,
+        h('p', { class: 'muted' }, `${CLUBS[state.club]}로 기록한 샷 데이터가 아직 없습니다. 분석 탭에서 「② 샷 데이터」에 캡처나 숫자를 넣고 분석하면 여기에 쌓입니다. 영상을 여러 개 한 번에 분석할 때는 샷 데이터가 붙지 않습니다.`),
+        others.length > 0 && h('p', { class: 'muted' }, '다른 클럽의 샷 기록: ' + others.map(([label, n]) => `${label} ${n}회`).join(', ') + '. 위에서 클럽을 바꾸면 보입니다.'));
+    }
+    const f1 = (v) => v.toFixed(Math.abs(v) < 100 ? 1 : 0);
+    const avg = (a) => a.reduce((t, v) => t + v, 0) / a.length;
+    const tile = ({ key, label, unit, better }) => {
+      const vals = shots.map((s) => SHOT_SERIES.find((q) => q.key === key).get(s)).filter((v) => v != null);
+      if (!vals.length) return h('div', { class: 'tile' }, h('div', { class: 'muted' }, label), h('div', { class: 'tile-num' }, '-'));
+      // 한 번의 샷은 편차가 크므로, 기록이 4회 이상이면 최근 몇 회 평균과 처음 몇 회 평균을 비교한다
+      const k = vals.length >= 4 ? Math.min(3, Math.floor(vals.length / 2)) : 1;
+      const now = avg(vals.slice(-k)), before = avg(vals.slice(0, k)), d = now - before;
+      const flat = vals.length < 2 || Math.abs(d) < 1e-9;
+      const good = better === 'up' ? d > 0 : d < 0;
+      const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+      const xy = vals.map((v, i) => [vals.length === 1 ? 50 : 4 + (i / (vals.length - 1)) * 92, 26 - ((v - lo) / span) * 22]);
+      const spark = svg('svg', { viewBox: '0 0 100 30', class: 'spark', role: 'img' });
+      if (xy.length > 1) spark.append(svg('polyline', { points: xy.map((q) => q.join(',')).join(' '), fill: 'none', stroke: '#3ddc84', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }));
+      spark.append(svg('circle', { cx: xy.at(-1)[0], cy: xy.at(-1)[1], r: 2.4, fill: '#3ddc84' }));
+      return h('div', { class: 'tile' },
+        h('div', { class: 'muted' }, label + (k > 1 ? ` · 최근 ${k}회 평균` : ' · 최근')),
+        h('div', { class: 'tile-num' }, f1(now), h('small', {}, unit)),
+        h('div', { class: 'delta ' + (flat ? 'flat' : good ? 'good' : 'bad') },
+          vals.length < 2 ? '첫 기록' : flat ? '변화 없음' : `${d > 0 ? '▲' : '▼'} ${f1(Math.abs(d))}${unit} ${good ? '좋아짐' : '나빠짐'}`),
+        spark);
+    };
+    return h('div', { class: 'card' }, title,
+      h('p', { class: 'muted' }, `${shots.length}회 기록 · 처음 기록과 비교한 변화입니다. 촬영 방향과 관계없이 이 클럽의 모든 샷을 모읍니다.`),
+      h('div', { class: 'tiles' }, [
+        { key: 'carry', label: '캐리', unit: 'm', better: 'up' },
+        { key: 'total', label: '비거리', unit: 'm', better: 'up' },
+        { key: 'ballSpeed', label: '볼 스피드', unit: 'm/s', better: 'up' },
+        { key: 'sidePct', label: '방향 편차', unit: '%', better: 'down' },
+      ].map(tile)),
+      h('p', { class: 'muted' }, '방향 편차는 좌우로 벗어난 거리 ÷ 캐리이며 작을수록 좋습니다.'),
+      h('details', {}, h('summary', {}, '항목별 그래프 보기 (발사각, 스핀 등)'), shotSelect, shotBox));
+  }
+
   mount(
     h('h2', {}, '분석 기록과 발전 추이'),
     viewPicker(render), clubPicker(render),
     profilePicker(allRefs, render),
-    sessions.length === 0 ? h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${VIEWS[state.view]} 분석 기록이 아직 없습니다.`) : [
+    sessions.length === 0 && h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${VIEWS[state.view]} 분석 기록이 아직 없습니다.`),
+    sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '점수 추이'),
         scored.length ? trendChart(scored.map((s) => ({ v: s.score, label: fmtDate(s.date) })), { min: 0, max: 100 }) : h('p', { class: 'muted' }, '데이터가 없습니다.'),
         scored.length > 1 && h('p', { class: 'muted' }, `첫 분석 ${scored[0].score}점 → 최근 ${scored.at(-1).score}점`)),
+    ],
+    shotCard(),
+    sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '자세 항목별 추이'), select, metricBox),
       h('div', { class: 'card' }, [...sessions].reverse().map((s) => h('div', { class: 'item', onclick: () => { state.detail = s.id; render(); } },
         h('img', { src: s.thumbs?.impact, alt: '' }),
@@ -670,8 +718,6 @@ async function renderHistory() {
           s.shot && h('div', { class: 'muted' }, [analyzeShot(s.shot, { club: clubOf(s), leftHanded: s.leftHanded }).name, s.shot.carry != null && `캐리 ${s.shot.carry}m`, s.shot.side != null && fmtShot(SHOT_FIELDS[2], s.shot.side)].filter(Boolean).join(' · '))),
         h('div', { class: 'big' }, String(s.score ?? '-'))))),
     ],
-    shots.length > 0 && h('div', { class: 'card' }, h('h3', {}, `샷 데이터 추이 · ${CLUBS[state.club]}`),
-      h('p', { class: 'muted' }, '촬영 방향과 관계없이 이 클럽으로 기록한 모든 샷입니다.'), shotSelect, shotBox),
   );
   if (sessions.length) drawMetric();
   if (shots.length) drawShotTrend();
