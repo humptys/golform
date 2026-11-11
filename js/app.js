@@ -373,10 +373,10 @@ async function syncCard() {
     card.append(h('p', { class: 'bad' }, '동기화 서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.'));
   }
   if (!user) {
-    const email = h('input', { type: 'email', placeholder: '이메일', autocomplete: 'email' });
-    const pw = h('input', { type: 'password', placeholder: '비밀번호 (6자 이상)', autocomplete: 'current-password' });
+    const email = h('input', { type: 'email', placeholder: '이메일 주소', autocomplete: 'email' });
+    const pw = h('input', { type: 'password', placeholder: '비밀번호 (6자 이상, 새로 정하기)', autocomplete: 'current-password' });
     card.append(
-      h('p', { class: 'muted' }, '모든 기기에서 같은 계정으로 로그인하면 기록이 합쳐집니다.'),
+      h('p', { class: 'muted' }, '처음이라면 사용할 이메일과 새 비밀번호를 직접 정해 아래에 입력하고 「처음이면 가입」을 누르세요. 미리 만들어 둔 계정은 필요 없습니다. 이후 모든 기기에서 같은 이메일·비밀번호로 로그인하면 기록이 합쳐집니다.'),
       email, pw,
       h('div', { class: 'row' },
         h('button', { class: 'btn primary', onclick: guard(async () => { await sync.signIn(email.value.trim(), pw.value); await sync.syncNow(); render(); }) }, '로그인'),

@@ -58,18 +58,27 @@ const authMessage = (e) => {
   if (/invalid login credentials/i.test(m)) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if (/email not confirmed/i.test(m)) return '가입 확인 메일의 링크를 먼저 눌러 주세요.';
   if (/already registered/i.test(m)) return '이미 가입된 이메일입니다. 로그인해 주세요.';
+  if (/anonymous sign-ins/i.test(m)) return '이메일과 비밀번호를 입력해 주세요.';
+  if (/signups? not allowed|signup is disabled/i.test(m)) return '새 가입이 막혀 있습니다. 이미 만든 계정으로 로그인해 주세요.';
   if (/at least 6/i.test(m)) return '비밀번호는 6자 이상이어야 합니다.';
   if (/failed to fetch|networkerror/i.test(m)) return '서버에 연결하지 못했습니다. Project URL과 인터넷 연결을 확인해 주세요.';
   return m;
 };
 
+function requireCredentials(email, password) {
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('위 칸에 이메일 주소를 입력해 주세요.');
+  if ((password || '').length < 6) throw new Error('위 칸에 비밀번호를 6자 이상 입력해 주세요.');
+}
+
 export async function signIn(email, password) {
+  requireCredentials(email, password);
   const c = await getClient();
   const { error } = await c.auth.signInWithPassword({ email, password });
   if (error) throw new Error(authMessage(error));
 }
 /** @returns 바로 로그인되었으면 true, 확인 메일의 링크를 눌러야 하면 false */
 export async function signUp(email, password) {
+  requireCredentials(email, password);
   const c = await getClient();
   const { data, error } = await c.auth.signUp({ email, password });
   if (error) throw new Error(authMessage(error));
