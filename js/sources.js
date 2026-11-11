@@ -39,7 +39,8 @@ const BASIS = { fo_shoulder_turn_top: SOURCES[0], fo_hip_turn_top: SOURCES[0], f
 export function sourcesFor(key, side, { club = 'iron', profile = null } = {}) {
   const full = club === 'driver' || club === 'iron';
   const fault = full ? FAULT[key]?.[side === 'low' ? 0 : 1] ?? null : null;
-  let basis = full || key === 'tempo' ? BASIS[key] ?? null : null;
+  // 템포 연구도 풀스윙(약 3:1)에 대한 것이라 숏게임의 2:1 기준에는 붙이지 않는다
+  let basis = full ? BASIS[key] ?? null : null;
   if (profile && publishedStats(profile, club)?.keys.includes(key)) basis = SOURCES[3];
   return { fault, basis };
 }

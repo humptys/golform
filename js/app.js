@@ -161,6 +161,26 @@ function basisFor(all, view, profile, club) {
 const sourceList = () => h('div', { class: 'card' }, h('p', { class: 'muted' }, '측정 데이터 출처 (그 밖의 항목은 일반적인 레슨 기준입니다)'),
   h('ul', {}, SOURCES.map((x) => h('li', {}, extLink(x.url, x.label)))));
 
+/** 내장 기준이 어떤 데이터로 이뤄졌는지 항목별로 보여 준다. */
+function basisExplainer(basis) {
+  const rows = metricsForView(state.view).filter((m) => basis.stats[m.key]).map((m) => {
+    const src = sourcesFor(m.key, 'low', { club: state.club, profile: basis.kind === 'published' ? state.profile : null }).basis;
+    return { m, st: basis.stats[m.key], src };
+  });
+  const measured = rows.filter((r) => r.src).length;
+  return h('details', { class: 'explain' }, h('summary', {}, '어떤 데이터를 기준으로 쓰나요?'),
+    h('p', { class: 'muted' }, `${VIEWS[state.view]}·${CLUBS[state.club]} 기준 ${rows.length}개 항목 중 ${measured}개는 투어 프로를 3D 장비로 측정해 공개한 데이터이고, 나머지 ${rows.length - measured}개는 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다(측정 데이터 아님). 이 앱으로 실제 영상을 재서 보정한 값은 아직 없습니다.`),
+    h('table', {},
+      h('tr', {}, h('th', {}, '항목'), h('th', {}, '기준'), h('th', {}, '근거')),
+      rows.map(({ m, st, src }) => h('tr', {},
+        h('td', {}, `${PHASES[m.phase]} · ${m.label}`),
+        h('td', {}, `${fmt(m, st.mean)} ±${Math.max(m.floor, st.std).toFixed(m.digits)}`),
+        h('td', {}, src ? extLink(src.url, '측정 데이터') : '레슨 기준')))),
+    h('p', { class: 'muted' }, '측정 데이터 출처'),
+    h('ul', {}, [...new Map(rows.filter((r) => r.src).map((r) => [r.src.url, r.src])).values()].map((x) => h('li', {}, extLink(x.url, x.label)))),
+    h('p', { class: 'muted' }, '허용 범위(±)를 벗어나면 「주의」, 두 배 넘게 벗어나면 「교정 필요」로 표시합니다. 직접 등록한 기준 영상을 쓰려면 위에서 다른 기준을 고르세요.'));
+}
+
 // ───────── 분석 탭 ─────────
 async function renderAnalyze() {
   const allRefs = await db.getAll('refs');
@@ -210,6 +230,7 @@ async function renderAnalyze() {
             : basis.kind === 'published'
             ? `「${state.profile}」의 공개된 측정 수치와 비교합니다. ${basis.note}`
             : `「${state.profile}」 ${VIEWS[state.view]} 기준 영상 ${refs.length}개와 비교합니다.` + (refs.length < 3 ? ' 3개 이상 등록하면 기준이 더 안정적입니다.' : '')),
+          (basis.kind === 'textbook' || basis.kind === 'published') && basisExplainer(basis),
           filePicker('스윙 영상 선택', { onFiles: run })),
     out,
   );

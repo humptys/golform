@@ -107,3 +107,6 @@ details p { font-size: 13px; }
 .phase.small .shot-wrap { flex-basis: 30%; }
 .refs { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; margin: 4px 0; }
 .lg.goal { height: 0; border-top: 2px dashed var(--accent); }
+
+.explain { margin: 8px 0 12px; }
+.explain td:last-child, .explain th:last-child { white-space: nowrap; }
