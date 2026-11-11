@@ -1,0 +1,135 @@
+// 영상 파일 -> 프레임별 포즈 랜드마크 (MediaPipe Pose Landmarker, 기기 내 실행).
+// 영상은 어디에도 업로드되지 않는다. 모델 파일만 CDN에서 내려받는다.
+
+const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+
+export const MAX_SECONDS = 20;
+const MAX_FRAMES = 360;
+const BONES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]];
+
+let landmarkerPromise = null;
+let lastTs = 0; // VIDEO 모드는 호출 간 타임스탬프가 단조 증가해야 한다
+
+function getLandmarker() {
+  landmarkerPromise ??= (async () => {
+    const { FilesetResolver, PoseLandmarker } = await import(`${VISION}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${VISION}/wasm`);
+    const make = (delegate) =>
+      PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL, delegate },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+      });
+    try {
+      return await make('GPU');
+    } catch {
+      return await make('CPU');
+    }
+  })().catch((e) => {
+    landmarkerPromise = null;
+    throw new Error('포즈 분석 모델을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요. (' + e.message + ')');
+  });
+  return landmarkerPromise;
+}
+
+function seek(video, t) {
+  return new Promise((resolve) => {
+    if (Math.abs(video.currentTime - t) < 1e-4 && video.readyState >= 2) return resolve();
+    const done = () => {
+      video.removeEventListener('seeked', done);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, 4000);
+    video.addEventListener('seeked', done);
+    video.currentTime = t;
+  });
+}
+
+async function openVideo(file) {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.src = URL.createObjectURL(file);
+  await new Promise((resolve, reject) => {
+    video.onloadeddata = resolve;
+    video.onerror = () => reject(new Error('이 영상 형식은 재생할 수 없습니다.'));
+    video.load();
+  });
+  // iOS Safari는 한 번 재생을 시작해야 프레임 탐색이 안정적으로 동작한다
+  await video.play().then(() => video.pause()).catch(() => {});
+  if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error('영상 길이를 읽을 수 없습니다.');
+  return video;
+}
+
+/**
+ * @returns {frames: [{t, lm|null}], aspect, duration, capture(t, lm) -> dataURL, close()}
+ */
+export async function extractPoses(file, onProgress = () => {}) {
+  onProgress(0, '모델 불러오는 중…');
+  const landmarker = await getLandmarker();
+  const video = await openVideo(file);
+  const cleanup = () => URL.revokeObjectURL(video.src);
+  try {
+    if (video.duration > MAX_SECONDS) {
+      throw new Error(`영상이 너무 깁니다(${video.duration.toFixed(0)}초). 스윙 1회만 담기도록 ${MAX_SECONDS}초 이내로 잘라 주세요.`);
+    }
+    const aspect = video.videoWidth / video.videoHeight;
+    const scale = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    const step = Math.max(1 / 30, video.duration / MAX_FRAMES);
+    const count = Math.floor(video.duration / step);
+    const frames = [];
+    for (let i = 0; i < count; i++) {
+      const t = Math.min(video.duration - 0.001, (i + 0.5) * step);
+      await seek(video, t);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      lastTs += 34;
+      const res = landmarker.detectForVideo(canvas, lastTs);
+      const lm = res.landmarks?.[0];
+      frames.push({ t, lm: lm ? lm.map((p) => ({ x: p.x, y: p.y })) : null });
+      if (i % 5 === 0) {
+        onProgress((i + 1) / count, `자세 추출 중… ${Math.round(((i + 1) / count) * 100)}%`);
+        await new Promise((r) => setTimeout(r)); // 화면 갱신 양보
+      }
+    }
+
+    /** 해당 시점 프레임에 골격을 그려 작은 JPEG로 반환 (구간 검출 결과를 눈으로 확인하는 용도). */
+    const capture = async (t, lm) => {
+      await seek(video, t);
+      const c = document.createElement('canvas');
+      c.width = 270;
+      c.height = Math.round(270 / aspect);
+      const g = c.getContext('2d');
+      g.drawImage(video, 0, 0, c.width, c.height);
+      if (lm) {
+        g.strokeStyle = '#3ddc84';
+        g.lineWidth = 3;
+        for (const [a, b] of BONES) {
+          g.beginPath();
+          g.moveTo(lm[a].x * c.width, lm[a].y * c.height);
+          g.lineTo(lm[b].x * c.width, lm[b].y * c.height);
+          g.stroke();
+        }
+        g.fillStyle = '#fff';
+        for (const i of new Set(BONES.flat().concat(0))) {
+          g.beginPath();
+          g.arc(lm[i].x * c.width, lm[i].y * c.height, 3, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      return c.toDataURL('image/jpeg', 0.72);
+    };
+
+    return { frames, aspect, duration: video.duration, capture, close: cleanup };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "GolForm 골프 자세 교정",
+  "short_name": "GolForm",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f1a14",
+  "theme_color": "#0f1a14",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
