@@ -35,15 +35,41 @@ export async function readShotImage(file) {
   const words = data.words.map((w) => ({ text: w.text.trim(), x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 }));
   const nums = words.filter((w) => NUM.test(w.text));
 
-  // 같은 높이에 놓인 숫자 4개짜리 행을 위에서부터 찾는다
-  const rows = [];
-  for (const w of [...nums].sort((a, b) => a.y0 - b.y0)) {
+  // 큰 숫자 4개가 놓인 두 줄을 찾는다.
+  // 음수 부호나 L/R이 숫자와 떨어져 따로 읽히는 경우("- 122", "L 1.2")가 있어, 가까이 붙은 조각은 한 칸으로 합친다.
+  const pieces = words.filter((w) => /^[-RL]?-?[\d.]*$/.test(w.text) && w.text !== '' && w.text !== '.');
+  const lines = [];
+  for (const w of [...pieces].sort((a, b) => a.y0 - b.y0)) {
     const h = w.y1 - w.y0, cy = (w.y0 + w.y1) / 2;
-    const row = rows.find((r) => Math.abs(r.cy - cy) < 0.5 * r.h && Math.abs(r.h - h) < 0.4 * r.h);
-    if (row) row.items.push(w);
-    else rows.push({ cy, h, items: [w] });
+    const line = lines.find((l) => Math.abs(l.cy - cy) < 0.5 * l.h);
+    if (line) { line.items.push(w); line.h = Math.max(line.h, h); }
+    else lines.push({ cy, h, items: [w] });
   }
-  const numberRows = rows.filter((r) => r.items.length === 4).sort((a, b) => a.cy - b.cy).slice(0, 2);
+  for (const l of lines) {
+    const merged = [];
+    for (const w of l.items.sort((a, b) => a.x0 - b.x0)) {
+      const last = merged.at(-1);
+      if (last && w.x0 - last.x1 < 0.7 * l.h) { last.x1 = w.x1; last.y0 = Math.min(last.y0, w.y0); last.y1 = Math.max(last.y1, w.y1); last.text += w.text; }
+      else merged.push({ ...w });
+    }
+    l.items = merged;
+    l.y0 = Math.min(...merged.map((w) => w.y0));
+    l.y1 = Math.max(...merged.map((w) => w.y1));
+  }
+  // 첫 줄(거리 행): 위에서부터 처음 만나는 4칸짜리 줄. 이 줄의 칸 위치가 아래 줄의 기준이 된다.
+  const top = lines.filter((l) => l.items.length === 4 && l.items.some((w) => /\d/.test(w.text))).sort((a, b) => a.cy - b.cy)[0];
+  const numberRows = [];
+  if (top) {
+    const centers = top.items.map((w) => (w.x0 + w.x1) / 2);
+    const spacing = (centers[3] - centers[0]) / 3;
+    const cellsAt = (line) => centers.map((cx) => ({ x0: Math.round(cx - spacing * 0.46), x1: Math.round(cx + spacing * 0.46), y0: line.y0, y1: line.y1 }));
+    numberRows.push({ h: top.y1 - top.y0, items: cellsAt(top) });
+    // 둘째 줄(볼 정보 행): 첫 줄 아래에서 글자 크기가 비슷하고 칸 위치에 숫자가 놓인 줄
+    const second = lines.filter((l) => l.cy > top.y1 + top.h && Math.abs(l.h - top.h) < 0.4 * top.h
+      && l.items.filter((w) => centers.some((cx) => Math.abs((w.x0 + w.x1) / 2 - cx) < spacing * 0.4)).length >= 2)
+      .sort((a, b) => b.items.length - a.items.length || a.cy - b.cy)[0];
+    if (second) numberRows.push({ h: second.y1 - second.y0, items: cellsAt(second) });
+  }
 
   // 각 숫자 칸을 확대해 숫자만 두 번 읽는다.
   // 론치 모니터의 좁은 글꼴은 그대로 읽으면 7이 1로 읽히고, 가로로 늘려 읽으면 7은 맞지만 소수점을 놓치곤 한다.
@@ -67,13 +93,13 @@ export async function readShotImage(file) {
   const values = {};
   const uncertain = [];
   for (const [ri, row] of numberRows.entries()) {
-    const cells = row.items.sort((a, b) => a.x0 - b.x0);
-    for (const [ci, w] of cells.entries()) {
+    for (const [ci, w] of row.items.entries()) {
       const pad = Math.round(row.h * 0.28), key = ROWS[ri][ci];
-      const r = await readCell(w.x0 - pad, w.y0 - pad, w.x1 - w.x0 + pad * 2, w.y1 - w.y0 + pad * 2);
-      const ok = NUM.test(r.text);
-      values[key] = ok ? r.text.replace(/\.$/, '') : w.text;
-      if (!ok || !r.agree) uncertain.push(key);
+      const r = await readCell(Math.max(0, w.x0), Math.max(0, w.y0 - pad), w.x1 - w.x0, w.y1 - w.y0 + pad * 2);
+      const text = r.text.replace(/\.$/, '');
+      if (!NUM.test(text)) continue; // 읽지 못한 칸은 비워 두어 사용자가 직접 넣게 한다
+      values[key] = text;
+      if (!r.agree) uncertain.push(key);
     }
   }
   // 볼 스피드: "m/s" 바로 왼쪽 영역을 잘라 숫자만 다시 읽는다

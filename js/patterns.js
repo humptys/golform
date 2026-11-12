@@ -16,7 +16,7 @@ export const THEMES = [
   {
     id: 'standup', title: '숙인 상체 각도가 풀리며 일어선다',
     advice: '엉덩이를 뒤에 남겨 둔 채, 가슴이 공을 덮고 있다는 느낌을 임팩트까지 유지하세요.',
-    keys: ['dtl_spine_change_impact:low', 'dtl_hip_thrust_impact:high', 'dtl_head_lift_impact:high', 'dtl_spine_change_top:low', 'dtl_head_lift_top:high', 'fo_head_lift_top:high', 'dtl_trail_knee_top:high'],
+    keys: ['dtl_spine_change_impact:low', 'dtl_hip_thrust_impact:high', 'dtl_head_lift_impact:high', 'dtl_spine_change_top:low', 'dtl_head_lift_top:high', 'fo_head_lift_top:high'],
   },
   {
     id: 'dip', title: '스윙 중 몸이 주저앉는다',

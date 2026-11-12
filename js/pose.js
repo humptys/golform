@@ -32,16 +32,34 @@ function getLandmarker() {
   return landmarkerPromise;
 }
 
+/**
+ * 영상을 t초로 옮기고, 그 장면이 실제로 화면에 준비될 때까지 기다린다.
+ * 'seeked' 이벤트만 믿으면 일부 기기(특히 휴대폰)에서는 아직 이전 장면이 남아 있어,
+ * 사진과 골격이 서로 다른 순간의 것이 된다. 그래서 새 프레임이 표시됐다는 신호까지 확인한다.
+ */
 function seek(video, t) {
   return new Promise((resolve) => {
     if (Math.abs(video.currentTime - t) < 1e-4 && video.readyState >= 2) return resolve();
-    const done = () => {
-      video.removeEventListener('seeked', done);
+    let finished = false, seeked = false, presented = false, grace = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      video.removeEventListener('seeked', onSeeked);
       clearTimeout(timer);
+      clearTimeout(grace);
       resolve();
     };
-    const timer = setTimeout(done, 4000);
-    video.addEventListener('seeked', done);
+    const check = () => { if (seeked && presented) finish(); };
+    const onSeeked = () => {
+      seeked = true;
+      check();
+      // 같은 프레임으로 옮긴 경우 등 표시 신호가 오지 않을 수 있으므로 잠깐만 기다리고 넘어간다
+      if (!finished) grace = setTimeout(finish, 150);
+    };
+    const timer = setTimeout(finish, 4000);
+    video.addEventListener('seeked', onSeeked);
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { presented = true; check(); });
+    else presented = true;
     video.currentTime = t;
   });
 }
