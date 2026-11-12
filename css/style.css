@@ -143,3 +143,7 @@ svg.spark { width: 100%; height: 34px; display: block; margin-top: 4px; }
 .evidence { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 4px 0; font-size: 13px; color: var(--muted); }
 .ev { display: inline-flex; gap: 4px; align-items: center; }
 .num.major { background: var(--major); }
+
+nav button.has-badge { position: relative; }
+nav button.has-badge::after { content: ''; position: absolute; top: 12px; left: calc(50% + 16px); width: 8px; height: 8px; border-radius: 50%; background: var(--major); }
+.members { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }

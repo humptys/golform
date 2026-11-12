@@ -11,7 +11,9 @@ const STORE = { ref: 'refs', session: 'sessions' };
 let client = null;
 let running = null;
 let timer = null;
-export const status = { state: 'idle', message: '', lastSync: localStorage.getItem('golform-last-sync') };
+// state: idle | syncing | ok | error | pending(관리자 승인 대기)
+// isAdmin: 가입 요청을 승인할 수 있는 계정인지 / pending: 승인을 기다리는 가입 요청 수(관리자에게만)
+export const status = { state: 'idle', message: '', lastSync: localStorage.getItem('golform-last-sync'), isAdmin: false, pending: 0 };
 const emit = (detail = {}) => window.dispatchEvent(new CustomEvent('golform-sync', { detail }));
 
 export function getConfig() {
@@ -87,6 +89,48 @@ export async function signUp(email, password) {
 export async function signOut() {
   const c = await getClient();
   await c?.auth.signOut();
+  Object.assign(status, { state: 'idle', message: '', isAdmin: false, pending: 0 });
+  emit();
+}
+
+const MEMBERS = 'golform_members';
+const missingTable = (error) => /golform_members|schema cache|does not exist|PGRST205|42P01/i.test(`${error?.code} ${error?.message}`);
+
+/**
+ * 이 계정의 승인 상태. 승인제(supabase/approval.sql)를 아직 적용하지 않은 서버에서는 모두 승인된 것으로 본다.
+ * @returns {approved, isAdmin}
+ */
+async function getMembership(c, userId) {
+  const read = () => c.from(MEMBERS).select('approved,is_admin').eq('user_id', userId).limit(1);
+  let { data, error } = await read();
+  if (error) {
+    if (missingTable(error)) return { approved: true, isAdmin: false };
+    throw new Error(error.message);
+  }
+  if (!data.length) {
+    // 가입 때 등록이 누락된 경우: 승인 대기로 스스로 등록한다
+    await c.rpc('golform_request_access');
+    ({ data, error } = await read());
+    if (error) throw new Error(error.message);
+  }
+  return { approved: !!data[0]?.approved, isAdmin: !!data[0]?.is_admin };
+}
+
+/** 관리자용: 가입한 계정 목록(요청 시각 순). */
+export async function listMembers() {
+  const c = await getClient();
+  const { data, error } = await c.from(MEMBERS).select('user_id,email,approved,is_admin,requested_at').order('requested_at');
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** 관리자용: 계정의 승인 여부를 바꾼다. */
+export async function setApproved(userId, approved) {
+  const c = await getClient();
+  const { data, error } = await c.from(MEMBERS).update({ approved }).eq('user_id', userId).select('user_id');
+  if (error) throw new Error(error.message);
+  if (!data.length) throw new Error('승인 상태를 바꾸지 못했습니다. 관리자 계정인지 확인해 주세요.');
+  status.pending = (await listMembers()).filter((m) => !m.approved).length;
   emit();
 }
 
@@ -151,6 +195,15 @@ export function syncNow() {
       status.state = 'syncing';
       status.message = '';
       emit();
+      const member = await getMembership(client, user.id);
+      status.isAdmin = member.isAdmin;
+      if (!member.approved) {
+        status.state = 'pending';
+        status.pending = 0;
+        emit();
+        return null;
+      }
+      if (member.isAdmin) status.pending = (await listMembers()).filter((m) => !m.approved).length;
       const result = await reconcile(localSide, remoteSide(client, user.id));
       status.state = 'ok';
       status.lastSync = new Date().toISOString();

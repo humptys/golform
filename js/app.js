@@ -770,6 +770,7 @@ async function renderHistory() {
 function syncStatusText() {
   const st = sync.status;
   if (st.state === 'syncing') return '동기화 중…';
+  if (st.state === 'pending') return '가입 요청을 보냈습니다. 관리자가 승인하면 동기화가 시작됩니다. 그때까지 기록은 이 기기에만 저장됩니다.';
   if (st.state === 'error') return '동기화 실패: ' + st.message;
   return st.lastSync ? `마지막 동기화 ${fmtDateTime(st.lastSync)}` : '아직 동기화하지 않았습니다.';
 }
@@ -815,7 +816,7 @@ async function syncCard() {
   }
 
   const statusEl = h('p', { class: 'muted' }, syncStatusText());
-  state.onSyncStatus = () => { statusEl.textContent = syncStatusText(); statusEl.className = sync.status.state === 'error' ? 'bad' : 'muted'; };
+  state.onSyncStatus = () => { statusEl.textContent = syncStatusText(); statusEl.className = sync.status.state === 'error' ? 'bad' : sync.status.state === 'pending' ? 'warn-text' : 'muted'; };
   state.onSyncStatus();
   card.append(
     h('p', {}, `${user.email} 계정으로 로그인됨`), statusEl,
@@ -823,7 +824,36 @@ async function syncCard() {
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => sync.syncNow() }, '지금 동기화'),
       h('button', { class: 'btn small', onclick: async () => { await sync.signOut(); render(); } }, '로그아웃')));
+  if (sync.status.isAdmin) card.append(await membersBox());
   return card;
+}
+
+/** 관리자용: 가입 요청 승인. 승인된 계정만 서버에 기록을 저장할 수 있다. */
+async function membersBox() {
+  const box = h('div', { class: 'members' });
+  const draw = async () => {
+    let members;
+    try {
+      members = await sync.listMembers();
+    } catch (e) {
+      return box.replaceChildren(h('p', { class: 'bad' }, '가입 목록을 불러오지 못했습니다: ' + e.message));
+    }
+    const act = (m, approved, label, cls) => h('button', { class: 'btn small ' + cls, onclick: async (e) => {
+      e.target.disabled = true;
+      try { await sync.setApproved(m.user_id, approved); } catch (err) { alert(err.message); }
+      draw();
+    } }, label);
+    const row = (m, button) => h('div', { class: 'item' },
+      h('div', { class: 'grow' }, h('div', {}, m.email || '(이메일 없음)'), h('div', { class: 'muted' }, `${fmtDateTime(m.requested_at)} 가입`)), button);
+    const pending = members.filter((m) => !m.approved), approved = members.filter((m) => m.approved);
+    box.replaceChildren(h('div', {},
+      h('h3', {}, `가입 요청 ${pending.length}건`),
+      pending.length ? pending.map((m) => row(m, act(m, true, '승인', 'primary'))) : h('p', { class: 'muted' }, '승인을 기다리는 요청이 없습니다.'),
+      h('details', {}, h('summary', {}, `승인된 계정 ${approved.length}개`),
+        approved.map((m) => row(m, m.is_admin ? h('span', { class: 'tag good' }, '관리자') : act(m, false, '승인 취소', 'danger'))))));
+  };
+  await draw();
+  return box;
 }
 
 async function backupCard() {
@@ -897,6 +927,8 @@ async function render() {
 tabs.addEventListener('click', (e) => { const t = e.target.closest('button')?.dataset.tab; if (t) go(t); });
 window.addEventListener('golform-sync', (e) => {
   state.onSyncStatus?.();
+  // 승인을 기다리는 가입 요청이 있으면 설정 탭에 표시한다
+  tabs.querySelector('[data-tab=settings]')?.classList.toggle('has-badge', sync.status.pending > 0);
   // 다른 기기의 기록이 내려왔으면 목록을 다시 그린다(입력 중인 설정 화면과 분석 중인 화면은 건드리지 않는다)
   if (e.detail?.changed && !state.busy && state.tab !== 'settings' && !state.detail) render();
 });

@@ -84,6 +84,29 @@
 
 같은 기록이 두 기기에서 다르게 바뀐 경우 더 최근에 수정된 쪽이 남습니다. 한 기기에서 지운 기록은 다른 기기에서도 지워집니다.
 
+## 가입 승인제 (선택)
+
+가입을 열어 두되 관리자가 승인한 계정만 기록을 저장할 수 있게 합니다. Supabase에서 가입 허용을 켰다 껐다 할 필요가 없어집니다.
+
+1. Supabase의 **Authentication → Sign In / Providers**에서 "Allow new users to sign up"을 켜 둡니다.
+2. **SQL Editor**에 [`supabase/approval.sql`](supabase/approval.sql) 내용을 붙여넣고 실행합니다.
+   - 실행 시점에 이미 가입해 있던 계정은 모두 승인된 상태가 되고, 가장 먼저 가입한 계정이 관리자가 됩니다.
+3. 새로 가입한 사람은 "승인 대기" 상태가 되어 기록이 자기 기기에만 저장됩니다.
+4. 관리자 계정으로 앱을 열면 승인을 기다리는 요청이 있을 때 「설정」 탭에 빨간 점이 뜨고, 설정 화면의 "가입 요청"에서 **승인**을 누릅니다. 승인 취소도 같은 곳에서 합니다.
+
+**휴대폰 알림 받기 (선택)**: 가입 요청이 오면 푸시 알림을 받으려면 무료 알림 앱 [ntfy](https://ntfy.sh)를 씁니다.
+
+1. 휴대폰에 ntfy 앱을 설치하고, 남이 짐작하기 어려운 이름(예: `golform-` 뒤에 무작위 글자)으로 주제를 구독합니다.
+2. Supabase **Database → Extensions**에서 `pg_net`이 켜져 있는지 확인합니다.
+3. SQL Editor에서 그 주제 이름을 등록합니다.
+
+```sql
+insert into public.golform_config (key, value) values ('ntfy_topic', '여기에-구독한-주제-이름')
+  on conflict (key) do update set value = excluded.value;
+```
+
+알림에는 "새 가입 요청이 있습니다"라는 문구만 담기고 가입자의 이메일은 보내지 않습니다. 알림 전송이 실패해도 가입과 승인 절차에는 영향이 없습니다.
+
 ## 참고 영상 링크
 
 지적 항목마다 교정 레슨과 기준 선수의 스윙을 찾는 유튜브 검색 링크가 붙습니다. 특정 영상 주소는 사라지거나 바뀌기 때문에 검색 결과로 연결합니다.
@@ -114,6 +137,7 @@ npm test                      # 구간 검출·측정·비교·동기화 규칙 
 | `js/reconcile.js` | 기기와 서버의 기록을 맞추는 규칙 (순수 로직) |
 | `js/sync.js` | Supabase 로그인과 동기화 |
 | `supabase/schema.sql` | 동기화용 테이블과 보안 정책 |
+| `supabase/approval.sql` | 가입 승인제(회원 표, 승인 규칙, 가입 알림) |
 | `js/app.js` | 화면 |
 
 ## 결과의 일관성
