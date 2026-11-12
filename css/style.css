@@ -139,3 +139,7 @@ input.unsure { border-color: var(--minor); box-shadow: 0 0 0 1px var(--minor); }
 .delta { font-size: 13px; font-weight: 700; }
 .delta.good { color: var(--good); } .delta.bad { color: var(--major); } .delta.flat { color: var(--muted); font-weight: 400; }
 svg.spark { width: 100%; height: 34px; display: block; margin-top: 4px; }
+
+.evidence { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 4px 0; font-size: 13px; color: var(--muted); }
+.ev { display: inline-flex; gap: 4px; align-items: center; }
+.num.major { background: var(--major); }

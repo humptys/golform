@@ -72,6 +72,16 @@ export async function importAll(data) {
     throw new Error('GolForm 백업 파일이 아닙니다.');
   }
   for (const r of data.refs) if (r?.id && r.metrics) await put('refs', r);
-  for (const s of data.sessions) if (s?.id && s.metrics) await put('sessions', { ...s, hasVideo: !!(await get('videos', s.id)) });
+  for (const s of data.sessions) {
+    if (!s?.id) continue;
+    if (Array.isArray(s.parts)) {
+      // 정면·측면이 묶인 기록: 영상 보유 여부를 이 기기 기준으로 다시 채운다
+      const parts = [];
+      for (const part of s.parts) parts.push({ ...part, hasVideo: !!(await get('videos', `${s.id}:${part.view}`)) });
+      await put('sessions', { ...s, parts });
+    } else if (s.metrics) {
+      await put('sessions', { ...s, hasVideo: !!(await get('videos', s.id)) });
+    }
+  }
   return { refs: data.refs.length, sessions: data.sessions.length };
 }

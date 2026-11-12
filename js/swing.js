@@ -272,13 +272,21 @@ export function computeMetrics(frames, ph, view) {
 
 /**
  * 어드레스 자세로 촬영 방향을 추정한다.
- * 정면에서는 양 어깨·골반이 좌우로 벌어져 보이고, 측면(타깃 후방)에서는 거의 겹쳐 보인다.
+ * 측면(타깃 후방)에서는 숙인 상체 때문에 어깨가 골반보다 앞으로 나오고 손도 몸 앞으로 멀리 나와 보인다.
+ * 정면에서는 어깨·골반·손이 한 수직선 근처에 있고 양 어깨·골반이 좌우로 벌어져 보인다.
+ * 카메라가 비스듬하면 틀릴 수 있으므로, strict면 확실할 때만 답하고 아니면 null을 돌려준다.
  */
-export function detectView(A) {
+export function detectView(A, { strict = false } = {}) {
   const torso = dist(shMid(A), hipMid(A));
-  const shoulders = Math.abs(A[LM.L_SH][0] - A[LM.R_SH][0]) / torso;
-  const hips = Math.abs(A[LM.L_HIP][0] - A[LM.R_HIP][0]) / torso;
-  return shoulders + hips > 0.75 ? 'faceon' : 'dtl';
+  const widths = (Math.abs(A[LM.L_SH][0] - A[LM.R_SH][0]) + Math.abs(A[LM.L_HIP][0] - A[LM.R_HIP][0])) / torso;
+  const lean = Math.abs(shMid(A)[0] - hipMid(A)[0]) / torso;
+  const reach = Math.abs(hands(A)[0] - hipMid(A)[0]) / torso;
+  const side = lean + reach;
+  // 측면에서는 상체 숙임(약 35~40도)만으로도 side가 0.6 안팎이 되고 손이 더해져 0.8 이상이 된다. 정면은 0.3 이하.
+  if (side > 0.65) return 'dtl';
+  if (side < 0.35 && widths > 0.75) return 'faceon';
+  if (strict) return null;
+  return side > 0.5 ? 'dtl' : widths > 0.75 ? 'faceon' : 'dtl';
 }
 
 /** 원본 프레임 -> {phases, times, view, metrics} 한 번에. view가 'auto'면 촬영 방향을 추정한다. */
@@ -291,5 +299,7 @@ export function analyzeSwing(raw, { aspect, leftHanded, view, club = 'iron' }) {
   // 화면에서 사람이 차지하는 키(코~발목, 화면 높이 대비). 너무 작으면 관절 위치 오차가 커진다.
   const A = frames[phases.address].p;
   const bodyHeight = (A[LM.L_ANK][1] + A[LM.R_ANK][1]) / 2 - A[LM.NOSE][1];
-  return { phases, times, view, metrics: computeMetrics(frames, phases, view), bodyHeight };
+  // 사용자가 고른 방향과 영상이 맞는지 점검할 수 있게, 확실할 때만 추정 방향을 함께 돌려준다
+  const looksLike = club === 'putter' ? null : detectView(A, { strict: true });
+  return { phases, times, view, looksLike, metrics: computeMetrics(frames, phases, view), bodyHeight };
 }

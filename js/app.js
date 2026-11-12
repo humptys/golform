@@ -7,6 +7,7 @@ import { drawShot, drawSkeleton, PHASE_OF } from './annotate.js';
 import { sourcesFor } from './sources.js';
 import { SHOT_FIELDS, buildShot, analyzeShot, diagnose, sidePercent, fmtShot } from './shot.js';
 import { readShotImage } from './ocr.js';
+import { findPatterns } from './patterns.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -19,12 +20,12 @@ const BUILTIN_PROFILE = '정석 폼'; // 영상 등록 없이 쓰는 내장 기�
 const PRESET_PROFILES = [BUILTIN_PROFILE, '로리 맥길로이', '넬리 코다'];
 const prefs = JSON.parse(localStorage.getItem('golform-prefs') || '{}');
 const state = {
-  tab: 'analyze', view: prefs.view || 'faceon', autoView: prefs.autoView !== false, club: prefs.club || 'iron', profile: prefs.profile || BUILTIN_PROFILE,
+  tab: 'analyze', view: prefs.view || 'faceon', club: prefs.club || 'iron', profile: prefs.profile || BUILTIN_PROFILE,
   leftHanded: !!prefs.leftHanded, slowmo: !!prefs.slowmo, saveVideo: prefs.saveVideo !== false,
   busy: false, detail: null, onSyncStatus: null,
 };
 const savePrefs = () => localStorage.setItem('golform-prefs', JSON.stringify({
-  view: state.view, autoView: state.autoView, club: state.club, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo, saveVideo: state.saveVideo,
+  view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo, saveVideo: state.saveVideo,
 }));
 
 const root = document.getElementById('view');
@@ -49,6 +50,21 @@ const fmtDateTime = (iso) => new Date(iso).toLocaleString('ko-KR', { year: 'nume
 const byDate = (a, b) => a.date.localeCompare(b.date);
 const profileOf = (r) => r.profile || DEFAULT_PROFILE;
 const clubOf = (r) => r.club || 'iron'; // 클럽 구분 이전의 기록은 아이언으로 본다
+const VIEW_SHORT = { faceon: '정면', dtl: '측면' };
+/**
+ * 기록 하나에 담긴 영상별 분석. 새 기록은 parts에 정면·측면이 함께 들어 있고,
+ * 예전 기록(영상 1개)은 기록 자체를 한 부분으로 본다.
+ */
+const partsOf = (s) => s.parts ?? [{
+  view: s.view, name: s.name, metrics: s.metrics, items: s.items, times: s.times, thumbs: s.thumbs, shots: s.shots, pose: s.pose,
+  warnings: s.warnings, score: s.score, basis: s.basis, refCount: s.refCount, hasVideo: s.hasVideo, videoKey: s.id,
+}];
+/** 기록에 딸린 영상 원본의 저장 키들 */
+const videoKeysOf = (s) => (s.parts ? s.parts.map((p) => `${s.id}:${p.view}`) : [s.id]);
+async function deleteSession(s) {
+  await db.del('sessions', s.id);
+  for (const k of videoKeysOf(s)) await db.del('videos', k);
+}
 const extLink = (href, label) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, label);
 
 // ───────── 공통 UI ─────────
@@ -141,6 +157,7 @@ async function processVideo(file, { view, leftHanded, slowmo, club }, onProgress
     }
     const warnings = [];
     if (r.bodyHeight < 0.4) warnings.push('사람이 화면에서 작게 찍혔습니다. 관절 위치 오차가 커지므로 카메라를 더 가까이 두거나 확대해서 찍으면 정확해집니다.');
+    if (r.looksLike && r.looksLike !== view) warnings.push(`이 영상은 ${VIEWS[r.looksLike]}에서 찍은 것처럼 보입니다. 정면 칸과 측면 칸에 영상을 바꿔 넣지 않았는지 확인하세요. 바뀌었다면 이 결과는 맞지 않습니다.`);
     return { view: r.view, metrics: r.metrics, times: r.times, thumbs, shots, pose, warnings };
   } finally {
     ex.close();
@@ -202,32 +219,53 @@ function shotForm(initial = null) {
 }
 
 /**
- * 결과 화면의 종합 진단 카드: 샷의 특징(출발 방향, 휨, 발사각 등)마다 영상에서 찾은 관련 자세를 이어서 보여 준다.
- * 샷 데이터가 없으면 추가할 수 있다는 안내만 보여 준다.
+ * 결과 화면 맨 위의 종합 진단 카드.
+ * 1) 핵심 패턴: 정면·측면의 지적을 묶어, 두 방향에서 함께 보이는 것을 앞세운다.
+ * 2) 샷 데이터가 있으면 구질·탄도의 특징마다 관련 자세를 잇는다. 없으면 추가할 수 있다.
  */
-function shotSection(s, diag, onSaved) {
+function summarySection(s, issues, diag, onSaved) {
   const box = h('div', { class: 'card' });
+  const club = clubOf(s);
+  const nums = (list) => list.map((i) => h('span', { class: `num ${i.severity}` }, String(i.n)));
   const view = () => {
-    const kids = [];
+    const patterns = findPatterns(issues, new Set(diag ? diag.links.keys() : [])).slice(0, 3);
+    const twoViews = partsOf(s).length > 1;
+    const kids = [h('div', { class: 'muted' }, ['종합 진단', twoViews && '정면 + 측면', s.shot && '샷 데이터'].filter(Boolean).join(' · '))];
+    if (diag?.name) kids.push(h('div', { class: 'shape' }, diag.name));
+    if (s.shot) kids.push(h('div', { class: 'chips' }, SHOT_FIELDS.filter((f) => s.shot[f.key] != null).map((f) => h('span', { class: 'chip' }, f.label + ' ', h('b', {}, fmtShot(f, s.shot[f.key]))))));
+
+    if (patterns.length) {
+      kids.push(h('h3', {}, '먼저 고칠 것'));
+      patterns.forEach((p, k) => {
+        const shotLabels = diag ? [...new Set(p.issues.flatMap((i) => diag.links.get(`${i.key}:${i.side}`) ?? []))] : [];
+        kids.push(h('div', { class: 'finding' },
+          h('div', { class: 'finding-head' }, `${k + 1}. ${p.title}`),
+          h('div', { class: 'evidence' },
+            p.both && h('span', { class: 'tag good' }, '정면·측면 모두에서 확인'),
+            Object.keys(VIEWS).filter((v) => p.views.includes(v)).map((v) => h('span', { class: 'ev' }, VIEW_SHORT[v] + ' ', nums(p.issues.filter((i) => i.view === v))))),
+          shotLabels.length > 0 && h('div', { class: 'impact' }, '이번 샷과 연결: ' + shotLabels.join(' · ')),
+          h('div', { class: 'cue' }, '→ ' + p.advice)));
+      });
+    } else {
+      kids.push(h('p', { class: 'ok' }, '✓ 기준과 큰 차이가 없습니다'));
+    }
+
     if (diag) {
-      const club = clubOf(s);
-      kids.push(
-        h('div', { class: 'muted' }, '영상 + 샷 데이터 종합 진단'),
-        diag.name && h('div', { class: 'shape' }, diag.name),
-        h('div', { class: 'chips' }, SHOT_FIELDS.filter((f) => s.shot[f.key] != null).map((f) => h('span', { class: 'chip' }, f.label + ' ', h('b', {}, fmtShot(f, s.shot[f.key]))))),
-        diag.findings.map((f) => h('div', { class: 'finding' },
+      kids.push(h('h3', {}, '샷으로 본 원인'));
+      for (const f of diag.findings) {
+        kids.push(h('div', { class: 'finding' },
           h('div', { class: 'finding-head' }, f.label),
           h('div', { class: 'muted' }, f.text),
           f.matched.length
             ? f.matched.map((m) => h('div', { class: `cause ${m.issue.severity}` },
                 h('span', { class: 'num' }, String(m.issue.n)),
-                h('div', {}, h('b', {}, textFor(metricByKey[m.issue.key], m.issue.side, club).title), h('div', { class: 'why' }, m.why))))
-            : Object.keys(f.causes).length > 0 && h('div', { class: 'muted' }, '영상에서는 이와 연결되는 자세 문제가 보이지 않습니다. 그립이나 클럽 페이스처럼 영상으로 볼 수 없는 요인일 수 있습니다.'))),
-        diag.summary.length > 0 && h('ul', {}, diag.summary.map((l) => h('li', {}, l))),
-        diag.links.size > 0 && h('p', { class: 'muted' }, '번호는 아래 사진의 번호와 같습니다. 자세와 구질의 연결은 흔히 함께 나타나는 조합을 근거로 한 추정이며, 그 자세를 고쳤을 때 구질이 달라지는지로 확인하세요.'));
-    } else {
-      kids.push(h('h3', {}, '샷 데이터'), h('p', { class: 'muted' }, 'GDR 같은 론치 모니터의 캡처나 숫자를 넣으면, 어떤 자세가 이번 구질·발사각과 연결되는지 함께 진단합니다.'));
+                h('div', {}, h('b', {}, `${VIEW_SHORT[m.issue.view]} · ${textFor(metricByKey[m.issue.key], m.issue.side, club).title}`), h('div', { class: 'why' }, m.why))))
+            : Object.keys(f.causes).length > 0 && h('div', { class: 'muted' }, '영상에서는 이와 연결되는 자세 문제가 보이지 않습니다. 그립이나 클럽 페이스처럼 영상으로 볼 수 없는 요인일 수 있습니다.')));
+      }
+      if (diag.summary.length) kids.push(h('ul', {}, diag.summary.map((l) => h('li', {}, l))));
     }
+    if (issues.length) kids.push(h('p', { class: 'muted' }, '번호는 아래 사진의 번호와 같습니다.' + (diag ? ' 자세와 구질의 연결은 흔히 함께 나타나는 조합을 근거로 한 추정이며, 그 자세를 고쳤을 때 구질이 달라지는지로 확인하세요.' : '')));
+    if (!s.shot) kids.push(h('p', { class: 'muted' }, 'GDR 같은 론치 모니터의 캡처나 숫자를 넣으면 어떤 자세가 구질·발사각과 연결되는지도 함께 진단합니다.'));
     kids.push(h('button', { class: 'btn small', onclick: edit }, s.shot ? '샷 데이터 수정' : '샷 데이터 추가'));
     box.replaceChildren(h('div', {}, kids));
   };
@@ -246,14 +284,14 @@ function shotSection(s, diag, onSaved) {
 }
 
 /** 내장 기준이 어떤 데이터로 이뤄졌는지 항목별로 보여 준다. */
-function basisExplainer(basis) {
-  const rows = metricsForView(state.view).filter((m) => basis.stats[m.key]).map((m) => {
+function basisExplainer(basis, view) {
+  const rows = metricsForView(view).filter((m) => basis.stats[m.key]).map((m) => {
     const src = sourcesFor(m.key, 'low', { club: state.club, profile: basis.kind === 'published' ? state.profile : null }).basis;
     return { m, st: basis.stats[m.key], src };
   });
   const measured = rows.filter((r) => r.src).length;
   return h('details', { class: 'explain' }, h('summary', {}, '어떤 데이터를 기준으로 쓰나요?'),
-    h('p', { class: 'muted' }, `${VIEWS[state.view]}·${CLUBS[state.club]} 기준 ${rows.length}개 항목 중 ${measured}개는 투어 프로를 3D 장비로 측정해 공개한 데이터이고, 나머지 ${rows.length - measured}개는 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다(측정 데이터 아님). 이 앱으로 실제 영상을 재서 보정한 값은 아직 없습니다.`),
+    h('p', { class: 'muted' }, `${VIEWS[view]}·${CLUBS[state.club]} 기준 ${rows.length}개 항목 중 ${measured}개는 투어 프로를 3D 장비로 측정해 공개한 데이터이고, 나머지 ${rows.length - measured}개는 골프 레슨에서 일반적으로 가르치는 자세를 수치로 옮긴 값입니다(측정 데이터 아님). 이 앱으로 실제 영상을 재서 보정한 값은 아직 없습니다.`),
     h('table', {},
       h('tr', {}, h('th', {}, '항목'), h('th', {}, '기준'), h('th', {}, '근거')),
       rows.map(({ m, st, src }) => h('tr', {},
@@ -266,140 +304,121 @@ function basisExplainer(basis) {
 }
 
 // ───────── 분석 탭 ─────────
-/** 분석 화면의 촬영 방향 선택: 자동(영상마다 인식) / 정면 / 측면 */
-function analyzeViewPicker(onChange) {
-  const btn = (label, on, apply) => h('button', { class: on ? 'on' : '', onclick: () => { if (state.busy) return; apply(); savePrefs(); onChange(); } }, label);
-  return h('div', { class: 'seg' },
-    btn('자동 인식', state.autoView, () => { state.autoView = true; }),
-    Object.entries(VIEWS).map(([k, label]) => btn(label, !state.autoView && state.view === k, () => { state.autoView = false; state.view = k; })));
-}
-
+// 같은 스윙을 정면과 측면에서 찍은 영상, 그리고 샷 데이터를 한 번에 넣어 하나의 기록으로 분석한다.
+// 어느 칸에 넣었는지로 촬영 방향을 정하므로 자동 인식이 틀려 방향이 뒤바뀌는 일이 없다.
 async function renderAnalyze() {
   const allRefs = await db.getAll('refs');
-  const refs = pickRefs(allRefs, state.view, state.profile, state.club);
-  const basis = basisFor(allRefs, state.view, state.profile, state.club);
-  // 자동 인식이면 어느 방향으로 판정될지 모르므로, 두 방향 모두 기준이 없을 때만 막는다
-  const noBasis = (state.autoView ? Object.keys(VIEWS) : [state.view]).every((v) => basisFor(allRefs, v, state.profile, state.club).kind === 'none');
   const out = h('div');
   const sf = shotForm();
+  const picked = { faceon: null, dtl: null };
+  const slotViews = Object.keys(VIEWS).filter((v) => !(state.club === 'putter' && v === 'dtl'));
+  const basisOf = Object.fromEntries(slotViews.map((v) => [v, basisFor(allRefs, v, state.profile, state.club)]));
 
-  /** 영상 1개를 분석해 기록으로 저장한다. */
-  const analyzeOne = async (file, shot, onProgress) => {
-    const r = await processVideo(file, { ...state, view: state.autoView ? 'auto' : state.view }, onProgress);
-    const b = basisFor(allRefs, r.view, state.profile, state.club);
-    if (b.kind === 'none') throw new Error(`${VIEWS[r.view]} 영상으로 인식했지만 「${state.profile}」의 ${VIEWS[r.view]} 기준이 없습니다.`);
-    const ev = evaluate(r.metrics, b.stats, r.view);
-    const session = {
-      id: db.newId(), date: new Date().toISOString(), view: r.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, name: file.name,
-      metrics: r.metrics, times: r.times, thumbs: r.thumbs, shots: r.shots, pose: r.pose, warnings: r.warnings, score: ev.score, items: ev.items,
-      refCount: pickRefs(allRefs, r.view, state.profile, state.club).length, basis: b.kind, hasVideo: false,
-    };
-    if (shot) session.shot = shot;
-    if (state.saveVideo) {
-      try { await db.put('videos', { id: session.id, blob: file }); session.hasVideo = true; } catch { /* 공간 부족 시 영상만 생략 */ }
-    }
-    return db.put('sessions', session);
+  const startBtn = h('button', { class: 'btn primary start', disabled: true, onclick: async () => {
+    if (state.busy || !slotViews.some((v) => picked[v])) return;
+    startBtn.disabled = true;
+    await run();
+    out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } }, '분석 시작');
+  const status = {};
+  const setPick = (view, file) => {
+    picked[view] = file;
+    status[view].textContent = file ? `선택됨: ${file.name}` : '선택 안 함';
+    startBtn.disabled = !slotViews.some((v) => picked[v]);
   };
 
-  const run = async (files) => {
+  const run = async () => {
     state.busy = true;
-    const done = [], errors = [];
-    // 샷 데이터는 어느 영상의 것인지 알 수 있을 때(영상 1개)만 붙인다
-    const shot = files.length === 1 ? sf.get() : null;
-    const skippedShot = files.length > 1 && sf.get();
-    for (const [n, file] of files.entries()) {
+    const id = db.newId();
+    const parts = [], errors = [];
+    const todo = slotViews.filter((v) => picked[v]);
+    for (const [n, view] of todo.entries()) {
+      const file = picked[view];
       const pc = progressCard();
-      out.replaceChildren(h('p', { class: 'muted' }, files.length > 1 ? `${n + 1} / ${files.length} · ${file.name}` : file.name), pc.el);
+      out.replaceChildren(h('p', { class: 'muted' }, `${VIEWS[view]} 영상 분석 중 (${n + 1}/${todo.length}) · ${file.name}`), pc.el);
       try {
-        done.push(await analyzeOne(file, shot, pc.update));
+        const b = basisOf[view];
+        const r = await processVideo(file, { ...state, view }, pc.update);
+        const ev = evaluate(r.metrics, b.stats, view);
+        const part = {
+          view, name: file.name, metrics: r.metrics, times: r.times, thumbs: r.thumbs, shots: r.shots, pose: r.pose, warnings: r.warnings,
+          score: ev.score, items: ev.items, basis: b.kind, refCount: pickRefs(allRefs, view, state.profile, state.club).length, hasVideo: false,
+        };
+        if (state.saveVideo) {
+          try { await db.put('videos', { id: `${id}:${view}`, blob: file }); part.hasVideo = true; } catch { /* 공간 부족 시 영상만 생략 */ }
+        }
+        parts.push(part);
       } catch (e) {
-        errors.push(`${file.name}: ${e.message}`);
+        errors.push(`${VIEWS[view]} 영상 (${file.name}): ${e.message}`);
       }
     }
     state.busy = false;
-    if (done.length) { state.view = done.at(-1).view; savePrefs(); sf.clear(); }
     const errorBox = errors.length > 0 && h('div', { class: 'card err' }, h('p', {}, '분석하지 못한 영상'), h('ul', {}, errors.map((x) => h('li', {}, x))));
-    if (files.length === 1) {
-      out.replaceChildren(...[done[0] ? await resultView(done[0]) : null, errorBox].filter(Boolean));
+    if (!parts.length) {
+      out.replaceChildren(errorBox);
+      startBtn.disabled = false;
       return;
     }
-    out.replaceChildren(...[
-      h('h2', {}, `${done.length}개 영상 분석 완료`),
-      skippedShot && h('div', { class: 'card warn' }, '영상을 여러 개 올려서 샷 데이터는 붙이지 않았습니다. 각 결과 화면에서 따로 넣을 수 있습니다.'),
-      done.length > 0 && h('div', { class: 'card' }, done.map((s) => {
-        const top = s.items.filter((i) => i.severity !== 'good').sort((x, y) => Math.abs(y.z) - Math.abs(x.z)).slice(0, 2);
-        return h('div', { class: 'item', onclick: () => { state.tab = 'history'; state.view = s.view; state.detail = s.id; savePrefs(); render(); } },
-          h('img', { src: s.thumbs?.impact, alt: '' }),
-          h('div', { class: 'grow' },
-            h('div', {}, `${VIEWS[s.view].replace(/\(.*/, '')} · ${s.name}`),
-            h('div', { class: 'muted' }, top.length ? top.map((i) => textFor(metricByKey[i.key], i.side, clubOf(s)).cue).join(' · ') : '기준과 비슷합니다')),
-          h('div', { class: 'big' }, String(s.score ?? '-')));
-      })),
-      done.length > 0 && h('p', { class: 'muted' }, '항목을 누르면 사진과 함께 자세한 결과를 봅니다.'),
-      errorBox,
-    ].filter(Boolean));
+    const scores = parts.map((p) => p.score).filter((v) => v != null);
+    const session = {
+      id, date: new Date().toISOString(), club: state.club, profile: state.profile, leftHanded: state.leftHanded, parts,
+      score: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+    };
+    const shot = sf.get();
+    if (shot) session.shot = shot;
+    const saved = await db.put('sessions', session);
+    for (const v of slotViews) setPick(v, null);
+    sf.clear();
+    out.replaceChildren(...[errorBox, await resultView(saved)].filter(Boolean));
   };
 
-  let picked = [];
-  const pickedText = h('p', { class: 'muted' }, '아직 선택한 영상이 없습니다.');
-  const startBtn = h('button', { class: 'btn primary start', disabled: true, onclick: async () => {
-    if (!picked.length || state.busy) return;
-    const files = picked;
-    picked = []; startBtn.disabled = true; pickedText.textContent = '아직 선택한 영상이 없습니다.';
-    await run(files);
-    out.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } }, '분석 시작');
-  const pick = (files) => {
-    picked = files;
-    pickedText.textContent = `선택됨: ${files[0].name}` + (files.length > 1 ? ` 외 ${files.length - 1}개` : '');
-    startBtn.disabled = false;
+  const slot = (view, n) => {
+    const b = basisOf[view];
+    status[view] = h('p', { class: 'muted' }, '선택 안 함');
+    return h('div', { class: 'card' },
+      h('h3', {}, `${n} ${VIEWS[view]} 영상`),
+      b.kind === 'none'
+        ? [h('p', { class: 'muted' }, `「${state.profile}」에는 ${VIEWS[view]} 기준이 없습니다. 기준 스윙 영상을 등록하거나 「정석 폼」 기준을 선택하세요.`),
+           h('button', { class: 'btn small', onclick: () => { state.view = view; savePrefs(); go('refs'); } }, '기준 영상 등록하러 가기')]
+        : [h('p', { class: 'muted' }, view === 'faceon' ? '몸 정면에서 찍은 영상입니다.' : '타깃 반대편 뒤에서 찍은 영상입니다.'),
+           h('div', { class: 'row' },
+             filePicker('영상 선택', { onFiles: ([f]) => setPick(view, f) }),
+             h('button', { class: 'btn small', onclick: () => setPick(view, null) }, '지우기')),
+           status[view],
+           (b.kind === 'textbook' || b.kind === 'published') && basisExplainer(b, view)]);
   };
-  const usable = !(state.club === 'putter' && !state.autoView && state.view === 'dtl') && !noBasis;
+  const usable = slotViews.some((v) => basisOf[v].kind !== 'none');
 
   mount(
     h('h2', {}, '내 스윙 분석'),
-    analyzeViewPicker(render), clubPicker(render),
+    clubPicker(render),
     profilePicker(allRefs, render),
     check('왼손잡이 스윙', 'leftHanded'),
     check('슬로모션 영상 (템포 비교 제외)', 'slowmo'),
     check('영상 원본도 이 기기에 저장 (기록에서 다시 보기)', 'saveVideo'),
-    state.club === 'putter' && !state.autoView && state.view === 'dtl'
-      ? h('div', { class: 'card warn' }, h('p', {}, '퍼팅은 정면에서 찍은 영상만 분석할 수 있습니다.'), h('p', { class: 'muted' }, '측면에서는 퍼터가 앞뒤로 움직이는 것이 화면에 거의 드러나지 않아 스트로크 구간을 찾을 수 없습니다. 위에서 「정면」이나 「자동 인식」을 선택하세요.'))
-      : noBasis
-      ? h('div', { class: 'card warn' },
-          h('p', {}, `「${state.profile}」의 ${CLUBS[state.club]} 기준이 아직 없습니다.`),
-          h('p', { class: 'muted' }, '이 이름으로 공개된 측정 수치를 찾지 못했습니다. 기준 스윙 영상을 등록하거나 「정석 폼」 기준을 선택하세요.'),
-          h('button', { class: 'btn', onclick: () => go('refs') }, '기준 영상 등록하러 가기'))
-      : h('div', { class: 'card' },
-          state.autoView && h('p', { class: 'muted' }, '정면인지 측면인지는 영상마다 자동으로 인식합니다. 여러 영상을 한 번에 골라도 됩니다.'),
-          h('p', { class: 'muted' }, basis.kind === 'textbook'
-            ? `내장된 「정석 폼」의 ${CLUBS[state.club]} 기준과 비교합니다. 기준 영상을 등록하지 않아도 바로 분석할 수 있습니다.`
-            : basis.kind === 'published'
-            ? `「${state.profile}」의 공개된 측정 수치와 비교합니다. ${basis.note}`
-            : basis.kind === 'refs'
-            ? `「${state.profile}」 ${VIEWS[state.view]} 기준 영상 ${refs.length}개와 비교합니다.` + (refs.length < 3 ? ' 3개 이상 등록하면 기준이 더 안정적입니다.' : '')
-            : `「${state.profile}」에 등록한 기준 영상과 비교합니다.`),
-          (basis.kind === 'textbook' || basis.kind === 'published') && basisExplainer(basis),
-          h('h3', {}, '① 스윙 영상'),
-          filePicker('영상 선택 (여러 개 가능)', { multiple: true, onFiles: pick }), pickedText),
+    h('p', { class: 'muted' }, '같은 스윙을 정면과 측면에서 찍은 영상, 그리고 그 샷의 데이터를 함께 넣으면 하나로 묶어 진단합니다. 영상은 한쪽만 있어도 됩니다.'),
+    slot('faceon', '①'),
+    state.club === 'putter'
+      ? h('div', { class: 'card' }, h('h3', {}, '② 측면 영상'), h('p', { class: 'muted' }, '퍼팅은 측면에서 퍼터의 움직임이 화면에 거의 드러나지 않아 정면 영상만 분석합니다.'))
+      : slot('dtl', '②'),
     usable && h('div', { class: 'card' },
-      h('h3', {}, '② 샷 데이터 (선택)'),
-      h('p', { class: 'muted' }, 'GDR 캡처를 올리거나 숫자를 직접 넣으면 자세와 구질을 함께 진단합니다. 없으면 비워 두세요. 영상이 1개일 때만 적용됩니다.'), sf.el),
+      h('h3', {}, '③ 샷 데이터 (선택)'),
+      h('p', { class: 'muted' }, 'GDR 캡처를 올리거나 숫자를 직접 넣으면 자세와 구질을 함께 진단합니다. 없으면 비워 두세요.'), sf.el),
     usable && startBtn,
     out,
   );
 }
 
 /** 구간 사진 한 장. item이 있으면 그 문제 하나만 표시한다. 누르면 크게 본다. */
-function shotCanvas(s, phase, item) {
+function shotCanvas(part, phase, item, leftHanded) {
   const canvas = h('canvas', { class: 'shot', onclick: (e) => e.target.closest('.phase')?.classList.toggle('zoom') });
   const m = item && metricByKey[item.key];
   const img = new Image();
-  img.onload = () => drawShot(canvas, img, s.pose, phase, item, {
-    leftHanded: s.leftHanded,
+  img.onload = () => drawShot(canvas, img, part.pose, phase, item, {
+    leftHanded,
     fmtValue: (v) => (m ? v.toFixed(m.digits) + (m.unit === '°' ? '°' : '') : String(Math.round(v))),
   });
-  img.src = s.shots[phase];
+  img.src = part.shots[phase];
   return canvas;
 }
 
@@ -410,7 +429,7 @@ function noteItem(s, i, diag = null) {
   const club = clubOf(s), profile = profileOf(s);
   const t = textFor(m, i.side, club);
   const lesson = club === 'approach' || club === 'putter' ? searchLink(`골프 ${CLUBS[club]} ${t.cue} 레슨`) : lessonLink(i.key, i.side);
-  const src = sourcesFor(i.key, i.side, { club, profile: s.basis === 'published' ? profile : null });
+  const src = sourcesFor(i.key, i.side, { club, profile: i.basis === 'published' ? profile : null });
   return h('div', { class: `note ${i.severity}` },
     h('div', { class: 'note-head' }, h('span', { class: 'num' }, String(i.n)), h('b', {}, t.title)),
     h('div', { class: 'cue' }, '→ ' + t.cue),
@@ -419,82 +438,101 @@ function noteItem(s, i, diag = null) {
       lesson && extLink(lesson, '▶ 참고 영상'),
       src.fault && extLink(src.fault.url, '출처: ' + src.fault.label),
       src.basis && extLink(src.basis.url, '기준 데이터: ' + src.basis.label),
-      profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, s.view), `▶ ${profile} 스윙`)),
+      profile !== DEFAULT_PROFILE && !isBuiltin(profile) && extLink(playerLink(profile, i.view), `▶ ${profile} 스윙`)),
     h('details', {}, h('summary', {}, '자세히'),
       h('p', { class: 'nums' }, m.label, ': 내 값 ', h('b', {}, fmt(m, i.value)), ' · 기준 ', h('b', {}, fmt(m, i.mean)), ` (±${i.tol.toFixed(m.digits)})`),
       h('p', {}, h('b', {}, '왜 문제인가 '), t.why),
       h('p', {}, h('b', {}, '교정 '), t.fix),
       t.drill && h('p', {}, h('b', {}, '연습법 '), t.drill),
-      h('p', { class: 'nums' }, '기준값 근거: ', src.basis ? extLink(src.basis.url, src.basis.label) : (s.basis === 'refs' ? '등록한 기준 영상의 측정값' : '일반적인 레슨 기준 (측정 데이터 아님)'))));
+      h('p', { class: 'nums' }, '기준값 근거: ', src.basis ? extLink(src.basis.url, src.basis.label) : (i.basis === 'refs' ? '등록한 기준 영상의 측정값' : '일반적인 레슨 기준 (측정 데이터 아님)'))));
+}
+
+/** 기록의 모든 지적을 화면에 나오는 순서(정면 -> 측면, 어드레스 -> 피니시, 차이가 큰 순)로 번호를 매겨 모은다. */
+function collectIssues(s) {
+  const order = (i) => { const k = PHASE_KEYS.indexOf(PHASE_OF[i.key]); return k < 0 ? PHASE_KEYS.length : k; };
+  const seen = new Set();
+  const out = [];
+  for (const part of partsOf(s)) {
+    const list = part.items.filter((i) => i.severity !== 'good' && !seen.has(i.key)) // 템포처럼 두 영상에 모두 있는 항목은 한 번만
+      .sort((a, b) => order(a) - order(b) || Math.abs(b.z) - Math.abs(a.z));
+    for (const i of list) {
+      seen.add(i.key);
+      out.push({ ...i, n: out.length + 1, view: part.view, basis: part.basis });
+    }
+  }
+  return out;
 }
 
 async function resultView(s) {
   const profile = profileOf(s), club = clubOf(s);
-  const prev = (await db.getAll('sessions')).filter((x) => x.view === s.view && profileOf(x) === profile && clubOf(x) === club && x.date < s.date && x.score != null).sort(byDate).pop();
-  // 번호는 화면에 나오는 순서(어드레스 -> 피니시, 구간 안에서는 차이가 큰 순)대로 매긴다
-  const order = (i) => { const k = PHASE_KEYS.indexOf(PHASE_OF[i.key]); return k < 0 ? PHASE_KEYS.length : k; };
-  const issues = s.items.filter((i) => i.severity !== 'good')
-    .sort((a, b) => order(a) - order(b) || Math.abs(b.z) - Math.abs(a.z))
-    .map((i, n) => ({ ...i, n: n + 1 }));
-  const basis = s.basis ?? (isBuiltin(profile) ? 'textbook' : 'refs');
+  const parts = partsOf(s);
+  const viewsKey = (x) => partsOf(x).map((p) => p.view).join('+');
+  // 직전 기록과의 비교는 같은 조합(정면만 / 측면만 / 둘 다)끼리만 한다
+  const prev = (await db.getAll('sessions')).filter((x) => viewsKey(x) === viewsKey(s) && profileOf(x) === profile && clubOf(x) === club && x.date < s.date && x.score != null).sort(byDate).pop();
+  const issues = collectIssues(s);
+  const basisKinds = [...new Set(parts.map((p) => p.basis ?? (isBuiltin(profile) ? 'textbook' : 'refs')))];
 
   const el = h('div', {},
     h('div', { class: 'card' },
       h('div', { class: 'row' },
         h('div', { class: 'grow' },
-          h('div', { class: 'muted' }, `${fmtDateTime(s.date)} · ${VIEWS[s.view]} · ${CLUBS[club]} · 기준 ${profile}`),
+          h('div', { class: 'muted' }, `${fmtDateTime(s.date)} · ${parts.map((p) => VIEW_SHORT[p.view]).join(' + ')} · ${CLUBS[club]} · 기준 ${profile}`),
           h('div', { class: 'score' }, String(s.score ?? '-'), h('small', {}, ' / 100')),
-          prev && h('div', { class: 'muted' }, `직전 분석(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`)),
+          parts.length > 1 && h('div', { class: 'muted' }, parts.map((p) => `${VIEW_SHORT[p.view]} ${p.score ?? '-'}점`).join(' · ')),
+          prev && s.score != null && h('div', { class: 'muted' }, `직전 분석(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`)),
         h('div', {}, h('span', { class: 'tag major' }, `교정 필요 ${issues.filter((i) => i.severity === 'major').length}`), h('span', { class: 'tag minor' }, `주의 ${issues.filter((i) => i.severity === 'minor').length}`))),
       h('details', {}, h('summary', {}, '점수의 의미'),
-        h('p', { class: 'muted' }, basis === 'textbook'
+        basisKinds.map((kind) => h('p', { class: 'muted' }, kind === 'textbook'
           ? '투어 프로 공개 데이터와 일반적인 레슨 기준(정석 폼)에 얼마나 가까운지를 뜻합니다. 영상으로 보정한 기준이 아니므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
-          : basis === 'published'
+          : kind === 'published'
           ? `「${profile}」의 공개된 측정 수치(일부 항목)와 투어 프로 일반 기준에 얼마나 가까운지를 뜻합니다. 선수의 영상을 직접 분석한 기준은 아닙니다.`
-          : `「${profile}」 기준 영상 ${s.refCount}개와 얼마나 비슷한지를 뜻하며, 스윙의 절대적인 좋고 나쁨이 아닙니다.`))),
-    (s.warnings ?? []).map((w) => h('div', { class: 'card warn' }, w)),
+          : `「${profile}」에 등록한 기준 영상과 얼마나 비슷한지를 뜻하며, 스윙의 절대적인 좋고 나쁨이 아닙니다.`)),
+        parts.length > 1 && h('p', { class: 'muted' }, '전체 점수는 정면과 측면 점수의 평균입니다.'))),
+    parts.flatMap((p) => (p.warnings ?? []).map((w) => h('div', { class: 'card warn' }, `${VIEWS[p.view]} 영상: ${w}`))),
   );
 
-  if (s.hasVideo) {
-    const holder = h('div', { class: 'card' }, h('button', { class: 'btn', onclick: async () => {
-      const v = await db.get('videos', s.id);
-      if (v) holder.replaceChildren(h('video', { class: 'replay', controls: true, playsinline: true, src: URL.createObjectURL(v.blob) }));
-    } }, '영상 다시 보기'));
-    el.append(holder);
-  }
-
   const diag = s.shot ? diagnose(s.shot, issues, { club, leftHanded: s.leftHanded }) : null;
-  el.append(shotSection(s, diag, async (next) => el.replaceWith(await resultView(next))));
+  el.append(summarySection(s, issues, diag, async (next) => el.replaceWith(await resultView(next))));
 
-  if (s.shots && s.pose) {
-    el.append(
-      h('h2', {}, issues.length ? '사진으로 보는 교정 포인트' : '기준과 큰 차이가 없습니다'),
-      h('p', { class: 'legend' }, h('span', { class: 'lg mine' }), '지금 내 자세 ', h('span', { class: 'lg goal' }), '목표 ', '➜ 옮길 방향 · 사진을 누르면 커집니다'));
-    for (const phase of PHASE_KEYS) {
-      const items = issues.filter((i) => PHASE_OF[i.key] === phase);
-      el.append(h('h3', { class: 'phase-title' }, PHASES[phase], items.length ? h('span', { class: 'muted' }, ` 교정 ${items.length}가지`) : h('span', { class: 'ok' }, ' ✓ 기준과 비슷합니다')));
-      if (!items.length) el.append(h('div', { class: 'card phase small' }, h('div', { class: 'shot-wrap' }, shotCanvas(s, phase, null)), h('div', { class: 'notes muted' }, '골격선이 몸 위에 잘 놓였는지 확인하세요.')));
-      // 사진 한 장에 문제 하나씩
-      for (const i of items) el.append(h('div', { class: 'card phase' }, h('div', { class: 'shot-wrap' }, shotCanvas(s, phase, i)), h('div', { class: 'notes' }, noteItem(s, i, diag))));
+  el.append(h('p', { class: 'legend' }, h('span', { class: 'lg mine' }), '지금 내 자세 ', h('span', { class: 'lg goal' }), '목표 ', '➜ 옮길 방향 · 사진을 누르면 커집니다'));
+  for (const part of parts) {
+    const mine = issues.filter((i) => i.view === part.view);
+    el.append(h('h2', {}, `${VIEWS[part.view]} 영상`, parts.length > 1 && h('span', { class: 'muted' }, ` ${part.score ?? '-'}점`)));
+    if (part.hasVideo) {
+      const holder = h('div', { class: 'card' }, h('button', { class: 'btn', onclick: async () => {
+        const v = await db.get('videos', part.videoKey ?? `${s.id}:${part.view}`);
+        holder.replaceChildren(v
+          ? h('video', { class: 'replay', controls: true, playsinline: true, src: URL.createObjectURL(v.blob) })
+          : h('p', { class: 'muted' }, '영상 원본은 촬영한 기기에만 저장되어 있습니다.'));
+      } }, '영상 다시 보기'));
+      el.append(holder);
     }
-    const rest = issues.filter((i) => !PHASE_OF[i.key]);
-    if (rest.length) el.append(h('h3', { class: 'phase-title' }, '리듬'), h('div', { class: 'card' }, h('div', { class: 'notes' }, rest.map((i) => noteItem(s, i, diag)))));
-    el.append(h('p', { class: 'muted' }, '골격선이 몸에서 벗어나 있거나 사진이 실제 구간과 다르면 그 구간의 지적은 믿지 마세요.'));
-  } else {
-    // 사진 좌표가 저장되지 않은 예전 기록
-    el.append(
-      h('div', { class: 'card' }, h('div', { class: 'thumbs' }, PHASE_KEYS.map((k) => h('figure', {}, h('img', { src: s.thumbs[k], alt: PHASES[k] }), PHASES[k])))),
-      h('h2', {}, issues.length ? '고쳐야 할 점 (차이가 큰 순)' : '기준과 큰 차이가 없습니다'),
-      issues.length > 0 && h('div', { class: 'card' }, h('div', { class: 'notes' }, issues.map((i) => noteItem(s, i, diag)))),
-      h('p', { class: 'muted' }, '이 기록은 예전 방식으로 저장되어 사진 위 표시가 없습니다. 영상을 다시 분석하면 사진과 함께 볼 수 있습니다.'));
+    if (part.shots && part.pose) {
+      for (const phase of PHASE_KEYS) {
+        const items = mine.filter((i) => PHASE_OF[i.key] === phase);
+        el.append(h('h3', { class: 'phase-title' }, PHASES[phase], items.length ? h('span', { class: 'muted' }, ` 교정 ${items.length}가지`) : h('span', { class: 'ok' }, ' ✓ 기준과 비슷합니다')));
+        if (!items.length) el.append(h('div', { class: 'card phase small' }, h('div', { class: 'shot-wrap' }, shotCanvas(part, phase, null, s.leftHanded)), h('div', { class: 'notes muted' }, '골격선이 몸 위에 잘 놓였는지 확인하세요.')));
+        // 사진 한 장에 문제 하나씩
+        for (const i of items) el.append(h('div', { class: 'card phase' }, h('div', { class: 'shot-wrap' }, shotCanvas(part, phase, i, s.leftHanded)), h('div', { class: 'notes' }, noteItem(s, i, diag))));
+      }
+      const rest = mine.filter((i) => !PHASE_OF[i.key]);
+      if (rest.length) el.append(h('h3', { class: 'phase-title' }, '리듬'), h('div', { class: 'card' }, h('div', { class: 'notes' }, rest.map((i) => noteItem(s, i, diag)))));
+    } else {
+      // 사진 좌표가 저장되지 않은 예전 기록
+      el.append(
+        h('div', { class: 'card' }, h('div', { class: 'thumbs' }, PHASE_KEYS.map((k) => h('figure', {}, h('img', { src: part.thumbs[k], alt: PHASES[k] }), PHASES[k])))),
+        mine.length > 0 && h('div', { class: 'card' }, h('div', { class: 'notes' }, mine.map((i) => noteItem(s, i, diag)))),
+        h('p', { class: 'muted' }, '이 기록은 예전 방식으로 저장되어 사진 위 표시가 없습니다. 영상을 다시 분석하면 사진과 함께 볼 수 있습니다.'));
+    }
   }
+  el.append(h('p', { class: 'muted' }, '골격선이 몸에서 벗어나 있거나 사진이 실제 구간과 다르면 그 구간의 지적은 믿지 마세요.'));
 
   el.append(h('details', { class: 'card' }, h('summary', {}, '전체 측정값 보기'), h('table', {},
     h('tr', {}, h('th', {}, '항목'), h('th', {}, '내 값'), h('th', {}, '기준')),
-    s.items.map((i) => {
+    parts.flatMap((part) => part.items.map((i) => {
       const m = metricByKey[i.key];
-      return m && h('tr', {}, h('td', {}, h('span', { class: `dot ${i.severity}` }), `${PHASES[m.phase]} · ${m.label}`), h('td', {}, fmt(m, i.value)), h('td', {}, fmt(m, i.mean)));
-    }))));
+      return m && h('tr', {}, h('td', {}, h('span', { class: `dot ${i.severity}` }), `${parts.length > 1 ? VIEW_SHORT[part.view] + ' · ' : ''}${PHASES[m.phase]} · ${m.label}`), h('td', {}, fmt(m, i.value)), h('td', {}, fmt(m, i.mean)));
+    })))));
   return el;
 }
 
@@ -610,7 +648,7 @@ async function renderHistory() {
           h('span', { class: 'grow' }),
           h('button', { class: 'btn small danger', onclick: async () => {
             if (!confirm('이 기록을 삭제할까요?')) return;
-            await db.del('sessions', s.id); await db.del('videos', s.id); state.detail = null; render();
+            await deleteSession(s); state.detail = null; render();
           } }, '기록 삭제')),
         await resultView(s));
       return;
@@ -619,8 +657,12 @@ async function renderHistory() {
   }
 
   const allRefs = await db.getAll('refs');
-  const sessions = (await db.getAll('sessions')).filter((s) => s.view === state.view && profileOf(s) === state.profile && clubOf(s) === state.club).sort(byDate);
-  const stats = basisFor(allRefs, state.view, state.profile, state.club).stats;
+  // 정면·측면을 가리지 않고 같은 클럽·같은 기준의 기록을 모두 보여 준다
+  const sessions = (await db.getAll('sessions')).filter((s) => profileOf(s) === state.profile && clubOf(s) === state.club).sort(byDate);
+  const statsOf = Object.fromEntries(Object.keys(VIEWS).map((v) => [v, basisFor(allRefs, v, state.profile, state.club).stats]));
+  const valueOf = (s, key) => partsOf(s).map((p) => p.metrics[key]).find((v) => Number.isFinite(v));
+  const trendMetrics = [...new Map(Object.keys(VIEWS).flatMap((v) => metricsForView(v).map((m) => [m.key, { m, view: v }]))).values()]
+    .filter(({ m }) => sessions.some((s) => valueOf(s, m.key) != null));
   const scored = sessions.filter((s) => s.score != null);
   const metricBox = h('div');
   // 샷 데이터는 촬영 방향이나 기준과 무관하므로 같은 클럽의 모든 기록을 모아 본다
@@ -643,12 +685,13 @@ async function renderHistory() {
       x.note && h('p', { class: 'muted' }, x.note));
   }
   const select = h('select', { onchange: () => drawMetric() },
-    metricsForView(state.view).map((m) => h('option', { value: m.key }, `${PHASES[m.phase]} · ${m.label}`)));
+    trendMetrics.map(({ m, view }) => h('option', { value: m.key }, `${m.key === 'tempo' ? '' : VIEW_SHORT[view] + ' · '}${PHASES[m.phase]} · ${m.label}`)));
   function drawMetric() {
     const m = metricByKey[select.value];
-    const pts = sessions.filter((s) => Number.isFinite(s.metrics[m.key])).map((s) => ({ v: s.metrics[m.key], label: fmtDate(s.date) }));
+    if (!m) return metricBox.replaceChildren(h('p', { class: 'muted' }, '데이터가 없습니다.'));
+    const pts = sessions.filter((s) => valueOf(s, m.key) != null).map((s) => ({ v: valueOf(s, m.key), label: fmtDate(s.date) }));
     if (!pts.length) return metricBox.replaceChildren(h('p', { class: 'muted' }, '데이터가 없습니다.'));
-    const st = stats[m.key];
+    const st = statsOf[m.views[0]][m.key];
     const tol = st && Math.max(m.floor, st.n >= 3 ? st.std : 0);
     metricBox.replaceChildren(
       trendChart(pts, { band: st && { lo: st.mean - tol, hi: st.mean + tol }, format: (v) => v.toFixed(m.digits) }),
@@ -700,9 +743,9 @@ async function renderHistory() {
 
   mount(
     h('h2', {}, '분석 기록과 발전 추이'),
-    viewPicker(render), clubPicker(render),
+    clubPicker(render),
     profilePicker(allRefs, render),
-    sessions.length === 0 && h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${VIEWS[state.view]} 분석 기록이 아직 없습니다.`),
+    sessions.length === 0 && h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${CLUBS[state.club]} 분석 기록이 아직 없습니다.`),
     sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '점수 추이'),
         scored.length ? trendChart(scored.map((s) => ({ v: s.score, label: fmtDate(s.date) })), { min: 0, max: 100 }) : h('p', { class: 'muted' }, '데이터가 없습니다.'),
@@ -712,9 +755,9 @@ async function renderHistory() {
     sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '자세 항목별 추이'), select, metricBox),
       h('div', { class: 'card' }, [...sessions].reverse().map((s) => h('div', { class: 'item', onclick: () => { state.detail = s.id; render(); } },
-        h('img', { src: s.thumbs?.impact, alt: '' }),
-        h('div', { class: 'grow' }, h('div', {}, fmtDateTime(s.date)),
-          h('div', { class: 'muted' }, `교정 필요 ${s.items.filter((i) => i.severity === 'major').length} · 주의 ${s.items.filter((i) => i.severity === 'minor').length}${s.hasVideo ? ' · 영상 저장됨' : ''}`),
+        h('img', { src: partsOf(s)[0].thumbs?.impact, alt: '' }),
+        h('div', { class: 'grow' }, h('div', {}, `${fmtDateTime(s.date)} · ${partsOf(s).map((p) => VIEW_SHORT[p.view]).join('+')}`),
+          h('div', { class: 'muted' }, (() => { const all = collectIssues(s); return `교정 필요 ${all.filter((i) => i.severity === 'major').length} · 주의 ${all.filter((i) => i.severity === 'minor').length}${partsOf(s).some((p) => p.hasVideo) ? ' · 영상 저장됨' : ''}`; })()),
           s.shot && h('div', { class: 'muted' }, [analyzeShot(s.shot, { club: clubOf(s), leftHanded: s.leftHanded }).name, s.shot.carry != null && `캐리 ${s.shot.carry}m`, s.shot.side != null && fmtShot(SHOT_FIELDS[2], s.shot.side)].filter(Boolean).join(' · '))),
         h('div', { class: 'big' }, String(s.score ?? '-'))))),
     ],

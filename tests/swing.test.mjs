@@ -336,3 +336,42 @@ test('캡처 숫자 읽기: 두 번 읽은 결과를 합쳐 7과 소수점을 �
   assert.deepEqual(mergeReads('71', '1.1'), { text: '7.1', agree: false });
   assert.equal(mergeReads('12', '1234').agree, false);
 });
+
+test('핵심 패턴: 정면과 측면에서 함께 보이는 패턴을 앞세운다', async () => {
+  const { findPatterns } = await import('../js/patterns.js');
+  const issues = [
+    { n: 1, key: 'fo_shoulder_turn_top', side: 'low', z: -3.5, view: 'faceon' },
+    { n: 2, key: 'fo_hip_turn_top', side: 'low', z: -3, view: 'faceon' },
+    { n: 3, key: 'fo_head_lift_top', side: 'high', z: 1.2, view: 'faceon' },
+    { n: 4, key: 'dtl_spine_change_impact', side: 'low', z: -1.5, view: 'dtl' },
+    { n: 5, key: 'fo_stance', side: 'high', z: 1.1, view: 'faceon' },
+  ];
+  const p = findPatterns(issues);
+  assert.equal(p[0].id, 'standup'); // 두 방향에서 확인된 패턴이 편차가 더 큰 한쪽 패턴보다 앞선다
+  assert.equal(p[0].both, true);
+  assert.deepEqual(p[0].issues.map((i) => i.n), [3, 4]);
+  assert.equal(p[1].id, 'turn');
+  assert.equal(p.at(-1).id, 'setup');
+  assert.deepEqual(findPatterns([]), []);
+  // 준비 자세는 두 방향에 걸쳐 있어도 "함께 확인된 패턴"으로 치지 않는다
+  const setup = findPatterns([{ key: 'fo_stance', side: 'low', z: -3, view: 'faceon' }, { key: 'dtl_spine_addr', side: 'high', z: 3, view: 'dtl' }, { key: 'fo_hip_shift_impact', side: 'low', z: -1.2, view: 'faceon' }]);
+  assert.equal(setup.find((x) => x.id === 'setup').both, false);
+  // 이번 샷과 연결된 패턴은 편차가 더 큰 패턴보다 앞선다
+  const linked = findPatterns(issues.slice(0, 2).concat({ n: 9, key: 'fo_finish_weight', side: 'low', z: -1.1, view: 'faceon' }), new Set(['fo_finish_weight:low']));
+  assert.deepEqual(linked.map((x) => x.id), ['hang', 'turn']);
+});
+
+test('촬영 방향 점검: 측면 자세는 측면으로, 애매하면 판단을 보류한다', async () => {
+  const { detectView } = await import('../js/swing.js');
+  const pose = (shX, handX, half) => {
+    const A = [];
+    A[LM.L_SH] = [shX + half, 0.35]; A[LM.R_SH] = [shX - half, 0.35];
+    A[LM.L_HIP] = [0.5 + half / 2, 0.55]; A[LM.R_HIP] = [0.5 - half / 2, 0.55];
+    A[LM.L_WR] = [handX + 0.01, 0.62]; A[LM.R_WR] = [handX - 0.01, 0.62];
+    return A;
+  };
+  // 측면이지만 카메라가 비스듬해 어깨가 넓게 보이는 경우에도 상체 숙임과 손 위치로 측면이라 본다
+  assert.equal(detectView(pose(0.61, 0.62, 0.05), { strict: true }), 'dtl');
+  assert.equal(detectView(pose(0.5, 0.5, 0.06), { strict: true }), 'faceon');
+  assert.equal(detectView(pose(0.54, 0.56, 0.05), { strict: true }), null);
+});

@@ -96,6 +96,7 @@ const localSide = {
     for (const [kind, store] of Object.entries(STORE)) {
       for (const r of await db.getAll(store)) {
         const { hasVideo, updatedAt, ...data } = r; // 영상 보유 여부는 기기마다 다르므로 올리지 않는다
+        if (data.parts) data.parts = data.parts.map(({ hasVideo: _own, ...part }) => part);
         out.push({ id: r.id, kind, updatedAt: updatedAt ?? r.date, data });
       }
     }
@@ -105,12 +106,16 @@ const localSide = {
   async apply(kind, data, updatedAt) {
     if (!STORE[kind] || !data?.id) return;
     const rec = { ...data, updatedAt };
-    if (kind === 'session') rec.hasVideo = !!(await db.get('videos', data.id));
+    if (kind === 'session' && rec.parts) {
+      rec.parts = await Promise.all(rec.parts.map(async (part) => ({ ...part, hasVideo: !!(await db.get('videos', `${data.id}:${part.view}`)) })));
+    } else if (kind === 'session') {
+      rec.hasVideo = !!(await db.get('videos', data.id));
+    }
     await db.put(STORE[kind], rec, { local: true });
   },
   async remove(kind, id) {
     await db.del(STORE[kind], id, { local: true });
-    if (kind === 'session') await db.del('videos', id);
+    if (kind === 'session') for (const k of [id, `${id}:faceon`, `${id}:dtl`]) await db.del('videos', k);
   },
   clearTomb: (id) => db.del('tombs', id),
 };
