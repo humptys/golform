@@ -5,7 +5,7 @@ import { extractPoses } from './pose.js';
 import { lessonLink, playerLink, searchLink } from './links.js';
 import { drawShot, drawSkeleton, PHASE_OF } from './annotate.js';
 import { sourcesFor } from './sources.js';
-import { SHOT_FIELDS, buildShot, analyzeShot, diagnose, sidePercent, smashFactor, fmtShot } from './shot.js';
+import { SHOT_FIELDS, SIDE_WORDS, buildShot, analyzeShot, diagnose, sidePercent, smashFactor, fmtShot } from './shot.js';
 import { readShotImage } from './ocr.js';
 import { findPatterns } from './patterns.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
@@ -194,6 +194,13 @@ function shotForm(initial = null) {
     inputs[f.key] = h('input', { type: 'text', inputmode: f.signed ? 'text' : 'decimal', autocomplete: 'off', placeholder: f.hint ?? '', value: initial?.[f.key] != null ? show(f, initial[f.key]) : null });
     return h('label', { class: 'shot-field' }, h('span', {}, `${f.label} (${f.unit})`), inputs[f.key]);
   }));
+  // 구질 화살표(골프존 화면 등)에서 읽거나 직접 고르는 방향. 각도·스핀 숫자가 있으면 숫자가 우선한다.
+  const sidePick = (key, label) => {
+    inputs[key] = h('select', {}, h('option', { value: '' }, '모름'),
+      Object.entries(SIDE_WORDS[key]).sort((a, b) => a[0] - b[0]).map(([v, text]) => h('option', { value: v, selected: initial?.[key] != null && String(initial[key]) === v }, text)));
+    return h('label', { class: 'shot-field' }, h('span', {}, label), inputs[key]);
+  };
+  grid.append(sidePick('startSide', '출발 방향 (화살표)'), sidePick('curveSide', '휘는 방향 (화살표)'));
   const file = h('input', { type: 'file', accept: 'image/*', onchange: async (e) => {
     const [img] = e.target.files; e.target.value = '';
     if (!img) return;
@@ -234,7 +241,8 @@ function summarySection(s, issues, diag, onSaved) {
     const kids = [h('div', { class: 'muted' }, ['종합 진단', twoViews && '정면 + 측면', s.shot && '샷 데이터'].filter(Boolean).join(' · '))];
     if (diag?.name) kids.push(h('div', { class: 'shape' }, diag.name));
     if (s.shot) kids.push(h('div', { class: 'chips' }, SHOT_FIELDS.filter((f) => s.shot[f.key] != null).map((f) => h('span', { class: 'chip' }, f.label + ' ', h('b', {}, fmtShot(f, s.shot[f.key])))),
-      smashFactor(s.shot) != null && h('span', { class: 'chip' }, '스매시 팩터 ', h('b', {}, smashFactor(s.shot).toFixed(2)))));
+      smashFactor(s.shot) != null && h('span', { class: 'chip' }, '스매시 팩터 ', h('b', {}, smashFactor(s.shot).toFixed(2))),
+      Object.keys(SIDE_WORDS).filter((k) => s.shot[k] != null).map((k) => h('span', { class: 'chip' }, '화살표 ', h('b', {}, SIDE_WORDS[k][s.shot[k]])))));
 
     if (patterns.length) {
       kids.push(h('h3', {}, '먼저 고칠 것'));

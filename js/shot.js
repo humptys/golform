@@ -32,8 +32,16 @@ export function buildShot(raw) {
     const v = parseShotValue(raw[f.key]);
     if (v != null) shot[f.key] = v;
   }
+  // 구질 화살표에서 읽은 방향(-1 왼쪽, 0 곧게, 1 오른쪽). 숫자 데이터가 없을 때만 구질 판정에 쓰인다.
+  for (const k of ['startSide', 'curveSide']) {
+    if (raw[k] === '' || raw[k] == null) continue;
+    const v = Number(raw[k]);
+    if (v === -1 || v === 0 || v === 1) shot[k] = v;
+  }
   return Object.keys(shot).length ? shot : null;
 }
+
+export const SIDE_WORDS = { startSide: { '-1': '왼쪽으로 출발', 0: '똑바로 출발', 1: '오른쪽으로 출발' }, curveSide: { '-1': '왼쪽으로 휨', 0: '휘지 않음', 1: '오른쪽으로 휨' } };
 
 export const fmtShot = (f, v) => (f.key === 'side' ? `${v >= 0 ? 'R' : 'L'}${Math.abs(v)}` : String(v)) + f.unit;
 
@@ -113,6 +121,14 @@ export function analyzeShot(shot, { club = 'iron', leftHanded = false } = {}) {
     if (start === 'push') find('start', `${pushSide}으로 ${Math.abs(shot.dir)}° 출발 (푸시)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pushSide}을 보고 있었습니다.`, 'push');
     else if (start === 'pull') find('start', `${pullSide}으로 ${Math.abs(shot.dir)}° 출발 (풀)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pullSide}을 보고 있었습니다.`, 'pull');
     else find('start', '타깃 방향으로 똑바로 출발', '임팩트 순간 클럽 페이스가 타깃을 향했습니다.');
+  } else if (shot.startSide != null) {
+    // 각도 수치가 없고 화면의 구질 화살표에서 방향만 읽은 경우
+    const d = shot.startSide * hand;
+    start = d > 0 ? 'push' : d < 0 ? 'pull' : 'straight';
+    const note = ' 화면의 구질 화살표로 판정해 정확한 각도는 알 수 없습니다.';
+    if (start === 'push') find('start', `${pushSide}으로 출발 (푸시)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pushSide}을 보고 있었습니다.` + note, 'push');
+    else if (start === 'pull') find('start', `${pullSide}으로 출발 (풀)`, `임팩트 순간 클럽 페이스가 타깃보다 ${pullSide}을 보고 있었습니다.` + note, 'pull');
+    else find('start', '타깃 방향으로 똑바로 출발', '임팩트 순간 클럽 페이스가 타깃을 향했습니다.' + note);
   }
   if (shot.sideSpin != null) {
     const sp = shot.sideSpin * hand; // 음수 = 드로우 방향
@@ -122,6 +138,13 @@ export function analyzeShot(shot, { club = 'iron', leftHanded = false } = {}) {
     if (curve === 'draw' || curve === 'hook') find('curve', `${pullSide}으로 ${curve === 'hook' ? '크게 ' : ''}휨 (${curve === 'hook' ? '훅' : '드로우'})`, `스윙 궤도가 페이스 방향보다 더 ${pushSide}으로(인-아웃) 지나갔습니다.`, 'draw');
     else if (curve === 'fade' || curve === 'slice') find('curve', `${pushSide}으로 ${curve === 'slice' ? '크게 ' : ''}휨 (${curve === 'slice' ? '슬라이스' : '페이드'})`, `스윙 궤도가 페이스 방향보다 더 ${pullSide}으로(아웃-인) 지나갔습니다.`, 'fade');
     else find('curve', '거의 휘지 않음', '옆 회전이 적었습니다.');
+  } else if (shot.curveSide != null) {
+    const c = shot.curveSide * hand; // 음수 = 드로우 방향
+    curve = c < 0 ? 'draw' : c > 0 ? 'fade' : 'straight';
+    const note = ' 화면의 구질 화살표로 판정해 휘는 정도는 알 수 없습니다.';
+    if (curve === 'draw') find('curve', `${pullSide}으로 휨 (드로우 계열)`, `스윙 궤도가 페이스 방향보다 더 ${pushSide}으로(인-아웃) 지나갔습니다.` + note, 'draw');
+    else if (curve === 'fade') find('curve', `${pushSide}으로 휨 (페이드 계열)`, `스윙 궤도가 페이스 방향보다 더 ${pullSide}으로(아웃-인) 지나갔습니다.` + note, 'fade');
+    else find('curve', '거의 휘지 않음', '화면의 구질 화살표가 곧게 표시되었습니다.');
   }
   if (club === 'driver') {
     if (shot.launch != null) {

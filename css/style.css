@@ -147,3 +147,6 @@ svg.spark { width: 100%; height: 34px; display: block; margin-top: 4px; }
 nav button.has-badge { position: relative; }
 nav button.has-badge::after { content: ''; position: absolute; top: 12px; left: calc(50% + 16px); width: 8px; height: 8px; border-radius: 50%; background: var(--major); }
 .members { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }
+
+.shot-field select { width: 100%; margin: 2px 0 8px; padding: 9px 10px; }
+select.unsure { border-color: var(--minor); box-shadow: 0 0 0 1px var(--minor); }

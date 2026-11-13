@@ -396,3 +396,41 @@ test('골프존 라운드 상세 화면: 클럽·비거리와 헤드/볼 스피�
   assert.ok(low.findings[0].causes['dtl_hip_thrust_impact:high']);
   assert.equal(analyzeShot({ headSpeed: 36, ballSpeed: 47 }, { club: 'iron' }).findings.length, 0);
 });
+
+test('구질 화살표 판독: 실제 화면의 화살표와 그 변형들', async () => {
+  const { classifyArrow } = await import('../js/ocr.js');
+  const { buildShot, analyzeShot } = await import('../js/shot.js');
+  // 골프존 화면에서 떼어 낸 실제 화살표(위쪽이 왼쪽으로 꺾인 화살표)
+  const real = [
+    ' ############', '##############', '##############', '##############', '######', '######', '#######', '########',
+    '##    ###', '##    ####', '##    ####', '##     ###', '##      ####', '##      ####', '##        ###', '##        ####',
+    '          ####', '          ####', '            ##', '            ##', '            ####', '            ####', '            ####',
+    '             ###', '              ##', '              ##', '              ###', '              ###', '              ####',
+    '              ####', '              ####', '              ####', '              ####', '              ####',
+  ];
+  const toMask = (lines, pad = 6) => {
+    const w = Math.max(...lines.map((l) => l.length)) + pad * 2, h = lines.length + pad * 2;
+    const mask = new Array(w * h).fill(false);
+    lines.forEach((l, y) => [...l].forEach((ch, x) => { if (ch === '#') mask[(y + pad) * w + x + pad] = true; }));
+    return [mask, w, h];
+  };
+  const mirror = (lines) => { const w = Math.max(...lines.map((l) => l.length)); return lines.map((l) => [...l.padEnd(w)].reverse().join('')); };
+  assert.deepEqual(classifyArrow(...toMask(real)), { start: 0, curve: -1 });
+  assert.deepEqual(classifyArrow(...toMask(mirror(real))), { start: 0, curve: 1 });
+  // 곧은 화살표, 오른쪽으로 곧게 나가는 화살표
+  const straight = ['   #   ', '  ###  ', ' ##### ', ...Array(22).fill('  ###  ')];
+  assert.deepEqual(classifyArrow(...toMask(straight)), { start: 0, curve: 0 });
+  const push = Array.from({ length: 26 }, (_, y) => ' '.repeat(Math.round((25 - y) * 0.5)) + '###');
+  assert.deepEqual(classifyArrow(...toMask(push)), { start: 1, curve: 0 });
+  assert.equal(classifyArrow(new Array(400).fill(false), 20, 20), null);
+
+  // 화살표만 있고 숫자가 없으면 화살표로 구질을 정하고, 숫자가 있으면 숫자를 따른다
+  const shot = buildShot({ total: '229', headSpeed: '43.8', ballSpeed: '62.9', startSide: '0', curveSide: '-1' });
+  assert.equal(shot.curveSide, -1);
+  const a = analyzeShot(shot, { club: 'driver' });
+  assert.equal(a.name, '드로우');
+  assert.match(a.findings.find((f) => f.id === 'curve').text, /화살표/);
+  assert.equal(analyzeShot(shot, { club: 'driver', leftHanded: true }).name, '페이드');
+  assert.equal(analyzeShot({ ...shot, dir: 6, sideSpin: 900 }, { club: 'driver' }).name, '푸시 페이드');
+  assert.equal(buildShot({ startSide: '', curveSide: '5' }), null);
+});

@@ -95,7 +95,30 @@ export async function readShotImage(file) {
   // 큰 숫자 줄이 없는 화면(골프존 라운드 상세 등)은 "이름  값" 형태의 줄에서 읽는다
   if (!numberRows.length) {
     const round = parseRoundLines([...data.lines].sort((a, b) => a.bbox.y0 - b.bbox.y0).map((l) => l.text));
-    return { ...round, uncertain: [], found: Object.keys(round.values).length };
+    const uncertain = [];
+    // 비거리 숫자 오른쪽의 구질 화살표(색이 있는 작은 그림)를 읽는다
+    const dist = words.filter((w) => /\d{2,3}m$/.test(w.text) && /\//.test(w.text)).sort((a, b) => a.y0 - b.y0)[0]
+      ?? words.filter((w) => new RegExp(`^${round.values.total}m$`).test(w.text)).sort((a, b) => a.y0 - b.y0)[0];
+    if (dist) {
+      const hgt = dist.y1 - dist.y0;
+      const x0 = Math.round(dist.x1 + hgt * 0.1), y0 = Math.max(0, Math.round(dist.y0 - hgt * 0.8));
+      const w = Math.min(full.width - x0, Math.round(hgt * 3.5)), h = Math.round(hgt * 2.6);
+      if (w > 4 && h > 4) {
+        const px = full.getContext('2d').getImageData(x0, y0, w, h).data;
+        const mask = [];
+        for (let i = 0; i < w * h; i++) {
+          const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
+          mask.push(Math.max(r, g, b) - Math.min(r, g, b) > 70 && Math.max(r, g, b) > 120); // 글자(검정)·배경(흰색)이 아닌 색 화소
+        }
+        const arrow = classifyArrow(mask, w, h);
+        if (arrow) {
+          round.values.startSide = String(arrow.start);
+          round.values.curveSide = String(arrow.curve);
+          uncertain.push('startSide', 'curveSide'); // 그림 판독이라 항상 확인을 요청한다
+        }
+      }
+    }
+    return { ...round, uncertain, found: Object.keys(round.values).length };
   }
   for (const [ri, row] of numberRows.entries()) {
     for (const [ci, w] of row.items.entries()) {
@@ -162,4 +185,58 @@ export function parseRoundLines(lines) {
   if (speeds.length >= 2) [values.headSpeed, values.ballSpeed] = speeds;
   else if (speeds.length === 1) values.ballSpeed = speeds[0];
   return { values, club };
+}
+
+/**
+ * 구질 화살표 그림을 읽는다. 화살표는 아래에서 시작해 위로 올라가며, 끝(화살촉)이 위에 있다고 본다.
+ * 아래쪽 줄기의 기울기로 출발 방향을, 줄기가 그 직선에서 얼마나 벗어나 끝나는지로 휘는 방향을 판정한다.
+ * @param mask 화소별 색 여부(true = 화살표 색), 길이 w*h
+ * @returns {start: -1|0|1, curve: -1|0|1} (-1 왼쪽, 0 곧게, 1 오른쪽) 또는 판독 불가 시 null
+ */
+export function classifyArrow(mask, w, h) {
+  // 줄마다 이어진 색 구간을 구한다
+  const rows = [];
+  let total = 0;
+  for (let y = 0; y < h; y++) {
+    const runs = [];
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue;
+      const from = x;
+      while (x + 1 < w && mask[y * w + x + 1]) x++;
+      runs.push([from, x]);
+      total += x - from + 1;
+    }
+    rows.push(runs);
+  }
+  const ys = rows.map((r, y) => (r.length ? y : -1)).filter((y) => y >= 0);
+  if (ys.length < 8 || total < 20) return null;
+  const top = ys[0], bottom = ys.at(-1), height = bottom - top + 1;
+  if (height < 8) return null;
+
+  // 아래에서 위로 줄기를 따라간다. 화살촉의 다른 획과 섞이지 않게, 직전 위치에 가장 가까운 구간을 고른다.
+  const center = (r) => (r[0] + r[1]) / 2;
+  const path = [];
+  let prev = null;
+  for (let y = bottom; y >= top; y--) {
+    const runs = rows[y];
+    if (!runs.length) continue;
+    const pick = prev == null ? runs.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a)) : runs.reduce((a, b) => (Math.abs(center(b) - prev) < Math.abs(center(a) - prev) ? b : a));
+    if (prev != null && Math.abs(center(pick) - prev) > height * 0.45) continue; // 줄기에서 동떨어진 화소는 건너뛴다
+    prev = center(pick);
+    path.push([bottom - y, prev]); // [아래에서부터의 높이, x]
+  }
+  if (path.length < 6) return null;
+
+  // 구간별로 직선을 맞춰 기울기(위로 한 칸 갈 때 x가 움직이는 양)를 구한다
+  const slope = (pts) => {
+    if (pts.length < 2) return 0;
+    const mu = pts.reduce((t, p) => t + p[0], 0) / pts.length, mx = pts.reduce((t, p) => t + p[1], 0) / pts.length;
+    const den = pts.reduce((t, p) => t + (p[0] - mu) ** 2, 0);
+    return den > 0 ? pts.reduce((t, p) => t + (p[0] - mu) * (p[1] - mx), 0) / den : 0;
+  };
+  // 출발 방향: 맨 아래 30%의 기울기. 휘는 방향: 위쪽 절반이 아래쪽 절반보다 어느 쪽으로 더 기우는가.
+  const startSlope = slope(path.filter(([u]) => u <= height * 0.3));
+  const bend = slope(path.filter(([u]) => u > height * 0.5)) - slope(path.filter(([u]) => u <= height * 0.5));
+  return { start: startSlope > 0.25 ? 1 : startSlope < -0.25 ? -1 : 0, curve: bend > 0.15 ? 1 : bend < -0.15 ? -1 : 0 };
+
 }
