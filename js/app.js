@@ -5,7 +5,7 @@ import { extractPoses } from './pose.js';
 import { lessonLink, playerLink, searchLink } from './links.js';
 import { drawShot, drawSkeleton, PHASE_OF } from './annotate.js';
 import { sourcesFor } from './sources.js';
-import { SHOT_FIELDS, buildShot, analyzeShot, diagnose, sidePercent, fmtShot } from './shot.js';
+import { SHOT_FIELDS, buildShot, analyzeShot, diagnose, sidePercent, smashFactor, fmtShot } from './shot.js';
 import { readShotImage } from './ocr.js';
 import { findPatterns } from './patterns.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
@@ -207,7 +207,8 @@ function shotForm(initial = null) {
       msg.className = !r.found ? 'bad' : r.uncertain.length ? 'warn-text' : 'muted';
       msg.textContent = !r.found ? '숫자를 찾지 못했습니다. 직접 입력해 주세요.'
         : r.uncertain.length ? `${r.found}개 값을 읽었습니다. 노란 테두리 칸은 인식이 불확실하니 아래 캡처와 비교해 고쳐 주세요.`
-        : `${r.found}개 값을 읽었습니다. 아래 캡처와 같은지 한 번 확인해 주세요.`;
+        : `${r.found}개 값을 읽었습니다. 아래 캡처와 같은지 한 번 확인해 주세요.`
+          + (r.club && r.club !== state.club ? ` 캡처는 ${CLUBS[r.club]} 샷으로 보입니다. 위에서 고른 클럽(${CLUBS[state.club]})이 맞는지 확인하세요.` : '');
     } catch (err) { msg.className = 'bad'; msg.textContent = err.message; }
   } });
   const el = h('div', {}, h('label', { class: 'btn small' }, '캡처 화면에서 읽어 오기', file), msg, grid, preview);
@@ -232,7 +233,8 @@ function summarySection(s, issues, diag, onSaved) {
     const twoViews = partsOf(s).length > 1;
     const kids = [h('div', { class: 'muted' }, ['종합 진단', twoViews && '정면 + 측면', s.shot && '샷 데이터'].filter(Boolean).join(' · '))];
     if (diag?.name) kids.push(h('div', { class: 'shape' }, diag.name));
-    if (s.shot) kids.push(h('div', { class: 'chips' }, SHOT_FIELDS.filter((f) => s.shot[f.key] != null).map((f) => h('span', { class: 'chip' }, f.label + ' ', h('b', {}, fmtShot(f, s.shot[f.key]))))));
+    if (s.shot) kids.push(h('div', { class: 'chips' }, SHOT_FIELDS.filter((f) => s.shot[f.key] != null).map((f) => h('span', { class: 'chip' }, f.label + ' ', h('b', {}, fmtShot(f, s.shot[f.key])))),
+      smashFactor(s.shot) != null && h('span', { class: 'chip' }, '스매시 팩터 ', h('b', {}, smashFactor(s.shot).toFixed(2)))));
 
     if (patterns.length) {
       kids.push(h('h3', {}, '먼저 고칠 것'));
@@ -671,6 +673,7 @@ async function renderHistory() {
   const SHOT_SERIES = [
     ...SHOT_FIELDS.map((f) => ({ key: f.key, label: `${f.label} (${f.unit})`, get: (s) => s.shot[f.key], note: f.signed ? '오른쪽 +, 왼쪽 −. 0에 가까울수록 똑바릅니다.' : '' })),
     { key: 'sidePct', label: '방향 편차 (캐리 대비 %)', get: (s) => sidePercent(s.shot), note: '좌우로 벗어난 거리 ÷ 캐리. 작을수록 정확합니다.' },
+    { key: 'smash', label: '스매시 팩터 (볼 ÷ 헤드 스피드)', get: (s) => smashFactor(s.shot), note: '클수록 정타에 가깝습니다. 드라이버는 1.45 안팎이 잘 맞은 샷입니다.' },
   ];
   const shotBox = h('div');
   const shotSelect = h('select', { class: 'shot-select', onchange: () => drawShotTrend() }, SHOT_SERIES.map((x) => h('option', { value: x.key }, x.label)));
@@ -678,7 +681,7 @@ async function renderHistory() {
     const x = SHOT_SERIES.find((q) => q.key === shotSelect.value);
     const pts = shots.filter((s) => x.get(s) != null).map((s) => ({ v: x.get(s), label: fmtDate(s.date) }));
     if (!pts.length) return shotBox.replaceChildren(h('p', { class: 'muted' }, '이 항목은 기록이 없습니다.'));
-    const f1 = (v) => v.toFixed(Math.abs(v) < 100 ? 1 : 0);
+    const f1 = (v) => v.toFixed(x.key === 'smash' ? 2 : Math.abs(v) < 100 ? 1 : 0);
     const avg = pts.reduce((t, p) => t + p.v, 0) / pts.length;
     shotBox.replaceChildren(trendChart(pts, { format: f1 }),
       h('p', { class: 'muted' }, pts.length > 1 ? `첫 기록 ${f1(pts[0].v)} → 최근 ${f1(pts.at(-1).v)} · 평균 ${f1(avg)} (${pts.length}회)` : `${f1(pts[0].v)} (1회). 기록이 쌓이면 추이가 보입니다.`),

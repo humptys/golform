@@ -375,3 +375,24 @@ test('촬영 방향 점검: 측면 자세는 측면으로, 애매하면 판단�
   assert.equal(detectView(pose(0.5, 0.5, 0.06), { strict: true }), 'faceon');
   assert.equal(detectView(pose(0.54, 0.56, 0.05), { strict: true }), null);
 });
+
+test('골프존 라운드 상세 화면: 클럽·비거리와 헤드/볼 스피드를 읽고 스매시 팩터를 구한다', async () => {
+  const { parseRoundLines } = await import('../js/ocr.js');
+  const { buildShot, analyzeShot, smashFactor } = await import('../js/shot.js');
+  // 실제 캡처를 글자 인식한 줄들(한글은 깨져 나온다)
+  const lines = ['SKT2:32 ® T & cz N{ Ril', '22 Ha SHH] xX] ME 1H', '23 H|71z| DR/229m', 'diIEADE  43.8m/s', 'EES = 62.9 m/s', '3H | 4H | 10H |', 'DR 214m 15 141m 17 120m'];
+  const r = parseRoundLines(lines);
+  assert.deepEqual(r, { values: { total: '229', headSpeed: '43.8', ballSpeed: '62.9' }, club: 'driver' });
+  assert.equal(parseRoundLines(['x I7 / 120m', 'a 33.1 m/s', 'b 44.0m/s']).club, 'iron');
+  assert.deepEqual(parseRoundLines(['아무 숫자 없음']), { values: {}, club: null });
+
+  const shot = buildShot(r.values);
+  assert.ok(Math.abs(smashFactor(shot) - 1.436) < 0.001);
+  const a = analyzeShot(shot, { club: 'driver' });
+  assert.equal(a.hasShape, false); // 출발 방향·스핀이 없어 구질은 판정하지 않는다
+  assert.match(a.findings[0].label, /스매시 팩터 1\.44 \(보통\)/);
+  const low = analyzeShot({ headSpeed: 44, ballSpeed: 58 }, { club: 'driver' });
+  assert.match(low.findings[0].label, /낮음/);
+  assert.ok(low.findings[0].causes['dtl_hip_thrust_impact:high']);
+  assert.equal(analyzeShot({ headSpeed: 36, ballSpeed: 47 }, { club: 'iron' }).findings.length, 0);
+});

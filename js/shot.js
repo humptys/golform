@@ -8,6 +8,7 @@ export const SHOT_FIELDS = [
   { key: 'side', label: '좌우거리', unit: 'm', signed: true, hint: 'R3.3 또는 L2' },
   { key: 'apex', label: '최고높이', unit: 'm' },
   { key: 'ballSpeed', label: '볼 스피드', unit: 'm/s' },
+  { key: 'headSpeed', label: '헤드 스피드', unit: 'm/s' },
   { key: 'launch', label: '발사각', unit: '°' },
   { key: 'dir', label: '좌우방향각', unit: '°', signed: true, hint: '오른쪽 +, 왼쪽 −' },
   { key: 'backSpin', label: '백스핀', unit: 'rpm' },
@@ -75,6 +76,16 @@ const CAUSES = {
     'fo_head_impact:high': '상체가 공보다 앞서 나가면 찍어 쳐서 낮게 출발합니다.',
     'fo_hip_shift_impact:high': '몸이 타깃 쪽으로 밀리면 로프트가 세워진 채 맞습니다.',
   },
+  // 스매시 팩터(볼 스피드 ÷ 헤드 스피드)가 낮다 = 헤드 속도에 비해 공이 덜 나갔다 = 스윗스폿을 벗어나 맞았다
+  lowSmash: {
+    'dtl_hip_thrust_impact:high': '골반이 공 쪽으로 나오면 몸과 공의 거리가 달라져 타점이 힐·토로 흔들립니다.',
+    'dtl_spine_change_impact:low': '상체가 일어서면 클럽이 지나가는 높이가 달라져 얇게 맞습니다.',
+    'dtl_head_lift_impact:high': '머리가 들리면 타점이 페이스 아래쪽으로 내려갑니다.',
+    'dtl_head_lift_impact:low': '주저앉으면 타점이 페이스 위쪽이나 뒤땅으로 흔들립니다.',
+    'fo_head_sway_top:low': '머리가 옆으로 밀렸다 돌아오면 최저점이 흔들려 타점이 일정하지 않습니다.',
+    'fo_hip_sway_top:low': '골반이 옆으로 밀렸다 돌아오면 최저점이 흔들립니다.',
+    'fo_lead_arm_impact:low': '앞팔이 굽으면 클럽이 짧아져 토 쪽이나 얇게 맞습니다.',
+  },
   highSpin: {
     'fo_hands_fwd_impact:low': '손목이 일찍 풀리면 로프트가 누워 스핀이 늘어납니다.',
     'fo_lead_arm_impact:low': '앞팔이 굽어 깎여 맞으면 스핀이 늘어납니다.',
@@ -123,6 +134,13 @@ export function analyzeShot(shot, { club = 'iron', leftHanded = false } = {}) {
     }
   }
 
+  const smash = smashFactor(shot);
+  if (smash != null && club === 'driver') {
+    const v = smash.toFixed(2);
+    if (smash < 1.38) find('smash', `스매시 팩터 ${v} (낮음)`, '헤드 스피드에 비해 볼 스피드가 낮습니다. 드라이버는 1.45 안팎이 잘 맞은 샷이며, 스윗스폿을 벗어나 맞았을 가능성이 큽니다.', 'lowSmash');
+    else find('smash', `스매시 팩터 ${v} (${smash >= 1.44 ? '좋음' : '보통'})`, '볼 스피드 ÷ 헤드 스피드입니다. 드라이버는 1.45 안팎이 잘 맞은 샷입니다.');
+  }
+
   const START = { push: '푸시', pull: '풀', straight: '스트레이트' };
   const CURVE = { draw: '드로우', hook: '훅', fade: '페이드', slice: '슬라이스', straight: '' };
   let name = null;
@@ -157,6 +175,9 @@ export function diagnose(shot, issues, opts = {}) {
   }
   return { ...r, links };
 }
+
+/** 스매시 팩터: 볼 스피드 ÷ 헤드 스피드. 얼마나 정타로 맞았는지를 나타낸다. */
+export const smashFactor = (shot) => (shot?.ballSpeed && shot?.headSpeed ? shot.ballSpeed / shot.headSpeed : null);
 
 /** 방향 정확도: 캐리 대비 좌우로 벗어난 비율(%). 작을수록 좋다. */
 export const sidePercent = (shot) => (shot?.side != null && shot.carry ? (Math.abs(shot.side) / shot.carry) * 100 : null);

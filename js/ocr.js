@@ -22,7 +22,7 @@ function getWorkers() {
   return workerPromise;
 }
 
-/** @returns {values: {필드: 문자열}, uncertain: [두 번 읽은 결과가 달라 확인이 필요한 필드], found: 읽어낸 필드 수} */
+/** @returns {values: {필드: 문자열}, uncertain: [두 번 읽은 결과가 달라 확인이 필요한 필드], found: 읽어낸 필드 수, club?: 화면에 적힌 클럽 종류} */
 export async function readShotImage(file) {
   const { page, cell } = await getWorkers();
   const img = await createImageBitmap(file);
@@ -92,6 +92,11 @@ export async function readShotImage(file) {
 
   const values = {};
   const uncertain = [];
+  // 큰 숫자 줄이 없는 화면(골프존 라운드 상세 등)은 "이름  값" 형태의 줄에서 읽는다
+  if (!numberRows.length) {
+    const round = parseRoundLines([...data.lines].sort((a, b) => a.bbox.y0 - b.bbox.y0).map((l) => l.text));
+    return { ...round, uncertain: [], found: Object.keys(round.values).length };
+  }
   for (const [ri, row] of numberRows.entries()) {
     for (const [ci, w] of row.items.entries()) {
       const pad = Math.round(row.h * 0.28), key = ROWS[ri][ci];
@@ -135,4 +140,26 @@ export function mergeReads(wide, plain) {
   const d = dotFromEnd(wide) || dotFromEnd(plain);
   const text = d > 0 && d < digits.length ? digits.slice(0, digits.length - d) + '.' + digits.slice(digits.length - d) : digits;
   return { text, agree: false };
+}
+
+/**
+ * 골프존 라운드 상세 화면처럼 "클럽 비거리  DR / 229m", "헤드 스피드  43.8 m/s" 줄로 된 화면을 읽는다.
+ * 한글 이름은 인식하지 않으므로 줄의 생김새와 순서로 판단한다: 클럽/거리 줄, 그리고 m/s 줄(위가 헤드, 아래가 볼).
+ * @param lines 위에서 아래 순서의 줄 문자열
+ * @returns {values: {total, headSpeed, ballSpeed}, club: 'driver' | 'iron' | null}
+ */
+export function parseRoundLines(lines) {
+  const values = {};
+  let club = null;
+  for (const line of lines) {
+    const m = /\b([A-Z]{1,2}\d{0,2})\s*\/\s*(\d{2,3})\s*m\b/.exec(line);
+    if (!m) continue;
+    values.total = m[2];
+    club = m[1] === 'DR' ? 'driver' : /^I\d{1,2}$/.test(m[1]) ? 'iron' : null;
+    break;
+  }
+  const speeds = lines.map((l) => /(\d{1,3}(?:\.\d+)?)\s*m\/s/.exec(l)?.[1]).filter(Boolean);
+  if (speeds.length >= 2) [values.headSpeed, values.ballSpeed] = speeds;
+  else if (speeds.length === 1) values.ballSpeed = speeds[0];
+  return { values, club };
 }
