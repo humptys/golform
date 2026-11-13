@@ -108,7 +108,8 @@ export async function readShotImage(file) {
         const mask = [];
         for (let i = 0; i < w * h; i++) {
           const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
-          mask.push(Math.max(r, g, b) - Math.min(r, g, b) > 70 && Math.max(r, g, b) > 120); // 글자(검정)·배경(흰색)이 아닌 색 화소
+          // 흰 배경이 아닌 화소. 화살표는 구질에 따라 빨간색일 수도, 회색(곧은 화살표)일 수도 있다.
+          mask.push(Math.max(r, g, b) - Math.min(r, g, b) > 70 || r + g + b < 540);
         }
         const arrow = classifyArrow(mask, w, h);
         if (arrow) {
@@ -175,10 +176,11 @@ export function parseRoundLines(lines) {
   const values = {};
   let club = null;
   for (const line of lines) {
-    const m = /\b([A-Z]{1,2}\d{0,2})\s*\/\s*(\d{2,3})\s*m\b/.exec(line);
+    // 아이언 표기 "I5"는 글자 인식에서 "15"로 읽히곤 하므로 함께 받는다
+    const m = /\b([A-Z]{1,2}\d{0,2}|[1l]\d)\s*\/\s*(\d{2,3})\s*m\b/.exec(line);
     if (!m) continue;
     values.total = m[2];
-    club = m[1] === 'DR' ? 'driver' : /^I\d{1,2}$/.test(m[1]) ? 'iron' : null;
+    club = m[1] === 'DR' ? 'driver' : /^[I1l]\d{1,2}$/.test(m[1]) ? 'iron' : null;
     break;
   }
   const speeds = lines.map((l) => /(\d{1,3}(?:\.\d+)?)\s*m\/s/.exec(l)?.[1]).filter(Boolean);

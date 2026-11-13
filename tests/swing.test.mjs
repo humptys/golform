@@ -384,6 +384,8 @@ test('골프존 라운드 상세 화면: 클럽·비거리와 헤드/볼 스피�
   const r = parseRoundLines(lines);
   assert.deepEqual(r, { values: { total: '229', headSpeed: '43.8', ballSpeed: '62.9' }, club: 'driver' });
   assert.equal(parseRoundLines(['x I7 / 120m', 'a 33.1 m/s', 'b 44.0m/s']).club, 'iron');
+  // 아이언 "I5"가 "15"로 읽힌 실제 사례
+  assert.deepEqual(parseRoundLines(['23 H|71z| 15/ 141m', 'dl=ADE  37.2m/s', 'x 49.6 m/s']), { values: { total: '141', headSpeed: '37.2', ballSpeed: '49.6' }, club: 'iron' });
   assert.deepEqual(parseRoundLines(['아무 숫자 없음']), { values: {}, club: null });
 
   const shot = buildShot(r.values);
@@ -422,6 +424,9 @@ test('구질 화살표 판독: 실제 화면의 화살표와 그 변형들', asy
   assert.deepEqual(classifyArrow(...toMask(straight)), { start: 0, curve: 0 });
   const push = Array.from({ length: 26 }, (_, y) => ' '.repeat(Math.round((25 - y) * 0.5)) + '###');
   assert.deepEqual(classifyArrow(...toMask(push)), { start: 1, curve: 0 });
+  // 골프존 화면의 실제 곧은 화살표(회색, 화살촉이 양쪽으로 벌어진 모양)
+  const realStraight = ['       +++++', '     +++++++++', '   ++++ +++ ++++', ' ++++   +++   ++++', '+++     +++     +++', ...Array(11).fill('        +++')].map((l) => l.replace(/\+/g, '#'));
+  assert.deepEqual(classifyArrow(...toMask(realStraight)), { start: 0, curve: 0 });
   assert.equal(classifyArrow(new Array(400).fill(false), 20, 20), null);
 
   // 화살표만 있고 숫자가 없으면 화살표로 구질을 정하고, 숫자가 있으면 숫자를 따른다
