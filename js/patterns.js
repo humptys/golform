@@ -60,3 +60,53 @@ export function findPatterns(issues, linkedKeys = new Set()) {
   // 두 방향에서 확인된 것, 그다음 이번 샷의 구질과 연결된 것, 그다음 편차가 큰 것 순
   return out.sort((a, b) => Number(b.both) - Number(a.both) || Number(b.linked) - Number(a.linked) || b.weight - a.weight);
 }
+
+const VIEW_OF_PREFIX = { fo_: 'faceon', dtl_: 'dtl' };
+/** 그 패턴을 제대로 볼 수 있는 촬영 방향: 해당 방향의 근거 항목이 둘 이상인 경우만 친다. */
+const themeViews = (t) => {
+  const n = {};
+  for (const k of t.keys) {
+    const v = VIEW_OF_PREFIX[Object.keys(VIEW_OF_PREFIX).find((p) => k.startsWith(p))];
+    if (v) n[v] = (n[v] ?? 0) + 1;
+  }
+  return Object.keys(n).filter((v) => n[v] >= 2);
+};
+
+/**
+ * 누적 기록에서 되풀이되는 패턴을 뽑아 우선순위를 매긴다.
+ * @param history 시간순 기록 [{id, views: ['faceon','dtl'], issues: [{key, side, z, view}]}]
+ * @returns [{id, title, advice, total, count, marks, recentCount, recentN, status, priority, lastId}]
+ *   total: 그 패턴을 볼 수 있는 방향의 영상이 있던 기록 수 / count: 그중 패턴이 나타난 수
+ *   marks: 기록마다 나타났는지(시간순, 최근 8회) / status: persistent(계속) | new(최근 생김) | improving(줄어듦) | sometimes(가끔)
+ */
+export function summarizeHistory(history) {
+  const out = [];
+  for (const t of THEMES) {
+    const views = themeViews(t);
+    const weightOf = (h) => findPatterns(h.issues).find((x) => x.id === t.id)?.weight ?? 0;
+    // 그 패턴을 볼 수 있는 방향의 영상이 있었거나, 실제로 패턴이 나타난 기록만 센다
+    const eligible = history.filter((h) => h.views.some((v) => views.includes(v)) || weightOf(h) > 0);
+    if (!eligible.length) continue;
+    const hits = eligible.map(weightOf);
+    const count = hits.filter((w) => w > 0).length;
+    if (!count) continue;
+    const recentN = Math.min(3, eligible.length);
+    const recent = hits.slice(-recentN), earlier = hits.slice(0, -recentN);
+    const rate = (a) => (a.length ? a.filter((w) => w > 0).length / a.length : 0);
+    const recentRate = rate(recent), earlierRate = rate(earlier);
+    let status = recentRate >= 0.67 ? 'persistent' : 'sometimes';
+    if (earlier.length >= 2) {
+      if (earlierRate - recentRate >= 0.34) status = 'improving';
+      else if (earlierRate === 0 && recentRate > 0) status = 'new';
+    }
+    const avgWeight = hits.filter((w) => w > 0).reduce((a, b) => a + b, 0) / count;
+    // 최근에 자주, 크게 나타날수록 먼저. 최근 기록에 더 무게를 둔다.
+    const priority = (recentRate * 0.6 + (count / eligible.length) * 0.4) * avgWeight;
+    out.push({
+      id: t.id, title: t.title, advice: t.advice, total: eligible.length, count,
+      marks: hits.slice(-8).map((w) => w > 0), recentCount: recent.filter((w) => w > 0).length, recentN, status, priority,
+      lastId: [...eligible].reverse().find((h, i) => hits[hits.length - 1 - i] > 0)?.id ?? null,
+    });
+  }
+  return out.sort((a, b) => b.priority - a.priority);
+}

@@ -439,3 +439,35 @@ test('구질 화살표 판독: 실제 화면의 화살표와 그 변형들', asy
   assert.equal(analyzeShot({ ...shot, dir: 6, sideSpin: 900 }, { club: 'driver' }).name, '푸시 페이드');
   assert.equal(buildShot({ startSide: '', curveSide: '5' }), null);
 });
+
+test('누적 요약: 되풀이되는 패턴을 최근·빈도·크기 순으로 세우고 줄어드는 것은 구분한다', async () => {
+  const { summarizeHistory } = await import('../js/patterns.js');
+  const hang = { key: 'fo_hip_shift_impact', side: 'low', z: -2.5, view: 'faceon' };
+  const turn = { key: 'fo_shoulder_turn_top', side: 'low', z: -3, view: 'faceon' };
+  const stand = { key: 'dtl_spine_change_impact', side: 'low', z: -2, view: 'dtl' };
+  const rec = (id, views, issues) => ({ id, views, issues });
+  const history = [
+    rec('a', ['faceon'], [turn, hang]),
+    rec('b', ['faceon'], [turn, hang]),
+    rec('c', ['faceon', 'dtl'], [turn, hang, stand]),
+    rec('d', ['faceon', 'dtl'], [hang, stand]),
+    rec('e', ['faceon'], [hang]),
+    rec('f', ['faceon', 'dtl'], [hang, stand]),
+  ];
+  const s = summarizeHistory(history);
+  const by = Object.fromEntries(s.map((x) => [x.id, x]));
+  assert.equal(s[0].id, 'hang'); // 6회 모두 나타남
+  assert.deepEqual([by.hang.count, by.hang.total, by.hang.status], [6, 6, 'persistent']);
+  assert.deepEqual(by.hang.marks, [true, true, true, true, true, true]);
+  // 측면 영상이 있던 3회만 따져서 3회 중 3회
+  assert.deepEqual([by.standup.count, by.standup.total, by.standup.status], [3, 3, 'persistent']);
+  // 회전 부족은 앞의 3회에만 있었고 최근 3회에는 없다 -> 줄어드는 중, 우선순위는 뒤
+  assert.deepEqual([by.turn.count, by.turn.total, by.turn.status, by.turn.recentCount], [3, 6, 'improving', 0]);
+  assert.equal(s.at(-1).id, 'turn');
+  assert.equal(by.hang.lastId, 'f');
+  assert.equal(by.turn.lastId, 'c');
+  // 최근에 새로 생긴 패턴
+  const fresh = summarizeHistory([rec('a', ['faceon'], []), rec('b', ['faceon'], []), rec('c', ['faceon'], []), rec('d', ['faceon'], [turn]), rec('e', ['faceon'], [turn])]);
+  assert.equal(fresh[0].status, 'new');
+  assert.deepEqual(summarizeHistory([]), []);
+});

@@ -7,7 +7,7 @@ import { drawShot, drawSkeleton, PHASE_OF } from './annotate.js';
 import { sourcesFor } from './sources.js';
 import { SHOT_FIELDS, SIDE_WORDS, buildShot, analyzeShot, diagnose, sidePercent, smashFactor, fmtShot } from './shot.js';
 import { readShotImage } from './ocr.js';
-import { findPatterns } from './patterns.js';
+import { findPatterns, summarizeHistory } from './patterns.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -712,6 +712,35 @@ async function renderHistory() {
       h('p', { class: 'muted' }, st ? `초록 띠가 기준 범위(${fmt(m, st.mean)} ±${tol.toFixed(m.digits)})입니다. 점이 띠 안으로 들어올수록 기준에 가까워진 것입니다.` : '기준 영상이 없어 범위를 표시할 수 없습니다.'));
   }
 
+  /** 누적 요약 카드: 여러 기록에 걸쳐 되풀이되는 패턴을 모아 먼저 고칠 것을 고른다. */
+  function priorityCard() {
+    const all = summarizeHistory(sessions.map((s) => ({ id: s.id, views: partsOf(s).map((p) => p.view), issues: collectIssues(s) })));
+    const todo = all.filter((x) => x.status !== 'improving').slice(0, 3);
+    const better = all.filter((x) => x.status === 'improving').slice(0, 2);
+    const STATUS = { persistent: ['계속 나타남', 'major'], new: ['최근 생김', 'minor'], sometimes: ['가끔 나타남', ''] };
+    // 가장 자주 나온 구질
+    const names = shots.map((s) => analyzeShot(s.shot, { club: clubOf(s), leftHanded: s.leftHanded }).name).filter(Boolean);
+    const tally = Object.entries(names.reduce((m, n) => ({ ...m, [n]: (m[n] ?? 0) + 1 }), {})).sort((a, b) => b[1] - a[1])[0];
+    return h('div', { class: 'card' },
+      h('div', { class: 'muted' }, `누적 ${sessions.length}회 기록 기준 · ${CLUBS[state.club]}`),
+      h('h3', {}, '먼저 고칠 것'),
+      todo.length
+        ? todo.map((x, k) => h('div', { class: 'finding', onclick: () => { if (x.lastId) { state.detail = x.lastId; render(); } } },
+            h('div', { class: 'finding-head' }, `${k + 1}. ${x.title}`),
+            h('div', { class: 'evidence' },
+              h('span', { class: 'tag ' + STATUS[x.status][1] }, STATUS[x.status][0]),
+              h('span', { class: 'marks', title: '기록마다 나타났는지(오른쪽이 최근)' }, x.marks.map((m) => h('i', { class: m ? 'on' : '' }))),
+              `${x.total}회 중 ${x.count}회`),
+            h('div', { class: 'cue' }, '→ ' + x.advice)))
+        : h('p', { class: 'ok' }, '✓ 되풀이되는 문제가 없습니다'),
+      better.length > 0 && h('div', { class: 'finding' }, h('div', { class: 'muted' }, '좋아지고 있는 것'),
+        better.map((x) => h('p', { class: 'ok' }, `✓ ${x.title} · 최근 ${x.recentN}회 중 ${x.recentCount}회`))),
+      tally && h('p', { class: 'muted' }, `가장 자주 나온 구질: ${tally[0]} (샷 기록 ${names.length}회 중 ${tally[1]}회)`),
+      h('p', { class: 'muted' }, sessions.length < 3
+        ? '기록이 3회 미만이라 한두 번의 스윙에 좌우됩니다. 기록이 쌓일수록 믿을 만해집니다.'
+        : '점은 기록마다 그 문제가 나타났는지를 뜻합니다(오른쪽이 최근). 항목을 누르면 가장 최근에 나타난 기록으로 갑니다.'));
+  }
+
   /** 샷 추이 카드: 핵심 지표가 처음보다 나아졌는지 한눈에 보여 주고, 항목별 그래프는 펼쳐서 본다. */
   function shotCard() {
     const title = h('h3', {}, `샷 추이 · ${CLUBS[state.club]}`);
@@ -760,6 +789,7 @@ async function renderHistory() {
     clubPicker(render),
     profilePicker(allRefs, render),
     sessions.length === 0 && h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${CLUBS[state.club]} 분석 기록이 아직 없습니다.`),
+    sessions.length > 0 && priorityCard(),
     sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '점수 추이'),
         scored.length ? trendChart(scored.map((s) => ({ v: s.score, label: fmtDate(s.date) })), { min: 0, max: 100 }) : h('p', { class: 'muted' }, '데이터가 없습니다.'),

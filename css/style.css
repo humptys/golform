@@ -223,3 +223,9 @@ canvas.shot { width: 100%; display: block; border-radius: 14px; background: #000
 .explain td:last-child, .explain th:last-child { white-space: nowrap; }
 .members { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 6px; }
 .members .item { cursor: default; }
+
+/* 누적 요약: 기록마다 문제가 나타났는지를 점으로 */
+.marks { display: inline-flex; gap: 4px; align-items: center; }
+.marks i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.marks i.on { background: var(--major); }
+.card > .finding[onclick], .card .finding { cursor: default; }
