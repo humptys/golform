@@ -1,28 +1,27 @@
 /* GolForm 디자인 시스템
-   - 색은 모두 아래 토큰으로만 쓴다. 기기의 밝은/어두운 화면 설정을 자동으로 따른다.
+   - 색은 모두 아래 토큰으로만 쓴다. 바탕은 색조 없는 흰색/검정 두 가지이고, 색은 상태(좋음·주의·교정 필요)에만 쓴다.
    - 테두리 대신 면과 여백으로 구분하고, 숫자는 크게, 설명은 작고 옅게. */
 :root {
-  --bg: #f2f4f3; --card: #ffffff; --soft: #eef1ef; --line: #e4e9e6;
-  --text: #17201b; --muted: #68756d;
-  --accent: #0c9a57; --accent-ink: #ffffff; --accent-soft: #e0f4e8;
-  --good: #0c9a57; --minor: #b9770e; --minor-soft: #fcf1d6; --major: #e5484d; --major-soft: #fde7e7;
+  --bg: #f4f4f5; --card: #ffffff; --soft: #f0f0f2; --line: #e5e5e9;
+  --text: #111113; --muted: #6b6b72;
+  --accent: #111113; --accent-ink: #ffffff; --accent-soft: #ececef;
+  --good: #15803d; --minor: #b45309; --minor-soft: #fdf3d7; --major: #dc2626; --major-soft: #fde8e8;
   --num-ink: #ffffff;
-  --shadow: 0 1px 2px rgba(16, 24, 20, .04), 0 8px 24px rgba(16, 24, 20, .06);
-  --nav: rgba(255, 255, 255, .84);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 8px 24px rgba(0, 0, 0, .06);
+  --nav: rgba(255, 255, 255, .86);
   --radius: 20px;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c110f; --card: #161d19; --soft: #202a24; --line: #27322c;
-    --text: #eef3f0; --muted: #93a39a;
-    --accent: #3ddc84; --accent-ink: #052414; --accent-soft: #14351f;
-    --good: #3ddc84; --minor: #f2c14e; --minor-soft: #3a3115; --major: #ff6b5e; --major-soft: #40201d;
-    --num-ink: #0b140f;
-    --shadow: none;
-    --nav: rgba(12, 17, 15, .82);
-    color-scheme: dark;
-  }
+/* 어두운 화면. 머리말의 버튼으로 바꾸며, 처음에는 기기 설정을 따른다(index.html의 첫 스크립트). */
+:root[data-theme="dark"] {
+  --bg: #0a0a0b; --card: #17171a; --soft: #232327; --line: #2d2d32;
+  --text: #f4f4f5; --muted: #9a9aa3;
+  --accent: #f4f4f5; --accent-ink: #0a0a0b; --accent-soft: #2a2a2f;
+  --good: #4ade80; --minor: #fbbf24; --minor-soft: #3a2f12; --major: #f87171; --major-soft: #3f1d1d;
+  --num-ink: #0a0a0b;
+  --shadow: none;
+  --nav: rgba(10, 10, 11, .86);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -34,8 +33,12 @@ html, body {
 body { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
 
 /* ── 머리말 · 본문 · 하단 탭 ── */
-header { max-width: 640px; margin: 0 auto; padding: 18px 20px 4px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-header h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.03em; color: var(--accent); }
+header { max-width: 640px; margin: 0 auto; padding: 14px 16px 2px 20px; display: flex; align-items: center; gap: 10px; }
+header h1 { margin: 0; flex: 1; font-size: 20px; font-weight: 800; letter-spacing: -0.03em; color: var(--text); }
+#theme { flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--soft); color: var(--text); display: grid; place-items: center; cursor: pointer; }
+#theme svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#theme .moon, :root[data-theme="dark"] #theme .sun { display: none; }
+:root[data-theme="dark"] #theme .moon { display: block; }
 header .sub { color: var(--muted); font-size: 12px; }
 main { padding: 4px 16px 24px; max-width: 640px; margin: 0 auto; animation: rise .22s ease-out; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -90,8 +93,7 @@ button.primary, label.primary { background: var(--accent); color: var(--accent-i
 .btn.small { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
 .btn.danger { color: var(--major); }
 button:disabled { opacity: .45; }
-.btn.start { display: flex; width: 100%; min-height: 56px; font-size: 17px; border-radius: 18px; margin: 14px 0; box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 28%, transparent); }
-.btn.start:disabled { box-shadow: none; }
+.btn.start { display: flex; width: 100%; min-height: 56px; font-size: 17px; border-radius: 18px; margin: 14px 0; }
 input[type=file] { display: none; }
 
 select, input[type=text], input[type=url], input[type=email], input[type=password] {
@@ -117,7 +119,7 @@ label.check input {
 }
 label.check input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .15s ease; }
 label.check input:checked { background: var(--accent); }
-label.check input:checked::after { transform: translateX(18px); }
+label.check input:checked::after { transform: translateX(18px); background: var(--accent-ink); }
 
 progress { width: 100%; height: 8px; border: 0; border-radius: 99px; overflow: hidden; accent-color: var(--accent); background: var(--soft); }
 progress::-webkit-progress-bar { background: var(--soft); }
@@ -194,7 +196,7 @@ canvas.shot { width: 100%; display: block; border-radius: 14px; background: #000
 .note-head b { font-weight: 700; }
 .num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--minor); color: var(--num-ink); font-size: 12px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
 .num.major, .note.major .num, .cause.major .num { background: var(--major); }
-.cue { color: var(--accent); font-weight: 700; margin: 6px 0 4px; }
+.cue { color: var(--text); font-weight: 700; margin: 6px 0 4px; }
 .impact { display: inline-block; font-size: 12px; font-weight: 600; color: var(--minor); background: var(--minor-soft); padding: 3px 8px; border-radius: 8px; margin: 2px 0; }
 .refs, .links { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; margin: 6px 0; }
 .legend { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 0 4px; margin-top: 16px; }

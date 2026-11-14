@@ -21,11 +21,12 @@ const PRESET_PROFILES = [BUILTIN_PROFILE, '로리 맥길로이', '넬리 코다'
 const prefs = JSON.parse(localStorage.getItem('golform-prefs') || '{}');
 const state = {
   tab: 'analyze', view: prefs.view || 'faceon', club: prefs.club || 'iron', profile: prefs.profile || BUILTIN_PROFILE,
-  leftHanded: !!prefs.leftHanded, slowmo: !!prefs.slowmo, saveVideo: prefs.saveVideo !== false,
+  // 슬로모션 여부는 영상마다 다르므로 기억하지 않는다. 켜진 채 남으면 템포가 조용히 빠지기 때문이다.
+  leftHanded: !!prefs.leftHanded, slowmo: false, saveVideo: prefs.saveVideo !== false,
   busy: false, detail: null, onSyncStatus: null,
 };
 const savePrefs = () => localStorage.setItem('golform-prefs', JSON.stringify({
-  view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, slowmo: state.slowmo, saveVideo: state.saveVideo,
+  view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, saveVideo: state.saveVideo,
 }));
 
 const root = document.getElementById('view');
@@ -404,7 +405,8 @@ async function renderAnalyze() {
     clubPicker(render),
     profilePicker(allRefs, render),
     check('왼손잡이 스윙', 'leftHanded'),
-    check('슬로모션 영상 (템포 비교 제외)', 'slowmo'),
+    check('슬로모션으로 찍은 영상', 'slowmo'),
+    h('p', { class: 'muted' }, '느리게 재생되도록 찍은 영상일 때만 켜세요. 켜면 템포(백스윙·다운스윙 시간 비율)를 분석에서 뺍니다. 일반 속도 영상은 끈 채로 두세요.'),
     check('영상 원본도 이 기기에 저장 (기록에서 다시 보기)', 'saveVideo'),
     h('p', { class: 'muted' }, '같은 스윙을 정면과 측면에서 찍은 영상, 그리고 그 샷의 데이터를 함께 넣으면 하나로 묶어 진단합니다. 영상은 한쪽만 있어도 됩니다.'),
     slot('faceon', '①'),
@@ -936,6 +938,12 @@ async function render() {
     mount(errorCard(e));
   }
 }
+document.getElementById('theme')?.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  document.querySelector('meta[name=theme-color]').content = next === 'dark' ? '#0a0a0b' : '#f4f4f5';
+  try { localStorage.setItem('golform-theme', next); } catch { /* 저장이 막힌 환경에서는 이번 방문에만 적용 */ }
+});
 tabs.addEventListener('click', (e) => { const t = e.target.closest('button')?.dataset.tab; if (t) go(t); });
 window.addEventListener('golform-sync', (e) => {
   state.onSyncStatus?.();
