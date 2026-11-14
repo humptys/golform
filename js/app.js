@@ -484,13 +484,14 @@ async function resultView(s) {
 
   const el = h('div', {},
     h('div', { class: 'card' },
-      h('div', { class: 'row' },
+      h('div', { class: 'summary-head' },
+        h('div', { class: 'score ring', style: `--p:${s.score ?? 0}` }, h('div', {}, h('b', {}, String(s.score ?? '-')), h('small', {}, '100점 만점'))),
         h('div', { class: 'grow' },
-          h('div', { class: 'muted' }, `${fmtDateTime(s.date)} · ${parts.map((p) => VIEW_SHORT[p.view]).join(' + ')} · ${CLUBS[club]} · 기준 ${profile}`),
-          h('div', { class: 'score' }, String(s.score ?? '-'), h('small', {}, ' / 100')),
-          parts.length > 1 && h('div', { class: 'muted' }, parts.map((p) => `${VIEW_SHORT[p.view]} ${p.score ?? '-'}점`).join(' · ')),
-          prev && s.score != null && h('div', { class: 'muted' }, `직전 분석(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`)),
-        h('div', {}, h('span', { class: 'tag major' }, `교정 필요 ${issues.filter((i) => i.severity === 'major').length}`), h('span', { class: 'tag minor' }, `주의 ${issues.filter((i) => i.severity === 'minor').length}`))),
+          h('div', { class: 'muted' }, `${fmtDateTime(s.date)}`),
+          h('div', {}, h('b', {}, `${CLUBS[club]} · ${parts.map((p) => VIEW_SHORT[p.view]).join(' + ')}`)),
+          h('div', { class: 'muted' }, `기준 ${profile}` + (parts.length > 1 ? ` · ${parts.map((p) => `${VIEW_SHORT[p.view]} ${p.score ?? '-'}점`).join(' · ')}` : '')),
+          prev && s.score != null && h('div', { class: 'muted' }, `직전(${fmtDate(prev.date)}) 대비 ${s.score - prev.score >= 0 ? '+' : ''}${s.score - prev.score}점`),
+          h('div', { class: 'tags' }, h('span', { class: 'tag major' }, `교정 필요 ${issues.filter((i) => i.severity === 'major').length}`), h('span', { class: 'tag minor' }, `주의 ${issues.filter((i) => i.severity === 'minor').length}`)))),
       h('details', {}, h('summary', {}, '점수의 의미'),
         basisKinds.map((kind) => h('p', { class: 'muted' }, kind === 'textbook'
           ? '투어 프로 공개 데이터와 일반적인 레슨 기준(정석 폼)에 얼마나 가까운지를 뜻합니다. 영상으로 보정한 기준이 아니므로, 점수 자체보다 크게 벗어난 항목과 시간에 따른 변화를 보세요.'
@@ -636,15 +637,15 @@ function trendChart(points, { min, max, band, format = (v) => String(Math.round(
   const x = (i) => (points.length === 1 ? (L + W - R) / 2 : L + (i / (points.length - 1)) * (W - L - R));
   const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
   const el = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img' });
-  if (band) el.append(svg('rect', { x: L, y: y(band.hi), width: W - L - R, height: Math.max(1, y(band.lo) - y(band.hi)), fill: '#3ddc84', opacity: 0.14 }));
+  if (band) el.append(svg('rect', { x: L, y: y(band.hi), width: W - L - R, height: Math.max(1, y(band.lo) - y(band.hi)), fill: 'var(--accent)', opacity: 0.14 }));
   for (const v of [lo, (lo + hi) / 2, hi]) {
-    el.append(svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: '#2a3c31', 'stroke-width': 1 }));
-    el.append(svg('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 10, fill: '#9db3a5' }, format(v)));
+    el.append(svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line)', 'stroke-width': 1 }));
+    el.append(svg('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--muted)' }, format(v)));
   }
-  if (points.length > 1) el.append(svg('polyline', { points: points.map((p, i) => `${x(i)},${y(p.v)}`).join(' '), fill: 'none', stroke: '#3ddc84', 'stroke-width': 2 }));
-  points.forEach((p, i) => el.append(svg('circle', { cx: x(i), cy: y(p.v), r: 3.5, fill: '#3ddc84' })));
-  el.append(svg('text', { x: L, y: H - 6, 'font-size': 10, fill: '#9db3a5' }, points[0].label));
-  if (points.length > 1) el.append(svg('text', { x: W - R, y: H - 6, 'text-anchor': 'end', 'font-size': 10, fill: '#9db3a5' }, points.at(-1).label));
+  if (points.length > 1) el.append(svg('polyline', { points: points.map((p, i) => `${x(i)},${y(p.v)}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
+  points.forEach((p, i) => el.append(svg('circle', { cx: x(i), cy: y(p.v), r: 3.5, fill: 'var(--accent)' })));
+  el.append(svg('text', { x: L, y: H - 6, 'font-size': 10, fill: 'var(--muted)' }, points[0].label));
+  if (points.length > 1) el.append(svg('text', { x: W - R, y: H - 6, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--muted)' }, points.at(-1).label));
   return el;
 }
 
@@ -731,8 +732,8 @@ async function renderHistory() {
       const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
       const xy = vals.map((v, i) => [vals.length === 1 ? 50 : 4 + (i / (vals.length - 1)) * 92, 26 - ((v - lo) / span) * 22]);
       const spark = svg('svg', { viewBox: '0 0 100 30', class: 'spark', role: 'img' });
-      if (xy.length > 1) spark.append(svg('polyline', { points: xy.map((q) => q.join(',')).join(' '), fill: 'none', stroke: '#3ddc84', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }));
-      spark.append(svg('circle', { cx: xy.at(-1)[0], cy: xy.at(-1)[1], r: 2.4, fill: '#3ddc84' }));
+      if (xy.length > 1) spark.append(svg('polyline', { points: xy.map((q) => q.join(',')).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }));
+      spark.append(svg('circle', { cx: xy.at(-1)[0], cy: xy.at(-1)[1], r: 2.4, fill: 'var(--accent)' }));
       return h('div', { class: 'tile' },
         h('div', { class: 'muted' }, label + (k > 1 ? ` · 최근 ${k}회 평균` : ' · 최근')),
         h('div', { class: 'tile-num' }, f1(now), h('small', {}, unit)),
