@@ -466,6 +466,10 @@ test('누적 요약: 되풀이되는 패턴을 최근·빈도·크기 순으로 
   assert.equal(s.at(-1).id, 'turn');
   assert.equal(by.hang.lastId, 'f');
   assert.equal(by.turn.lastId, 'c');
+  // 대표 사진용: 가장 최근에 나타난 기록에서 그 패턴의 지적을 차이가 큰 순으로 돌려준다
+  assert.deepEqual(by.hang.lastIssues.map((i) => i.key), ['fo_hip_shift_impact']);
+  const two = summarizeHistory([rec('z', ['faceon'], [{ ...hang, z: -1.2 }, { key: 'fo_finish_weight', side: 'low', z: -3.1, view: 'faceon' }])]);
+  assert.deepEqual(two[0].lastIssues.map((i) => i.key), ['fo_finish_weight', 'fo_hip_shift_impact']);
   // 최근에 새로 생긴 패턴
   const fresh = summarizeHistory([rec('a', ['faceon'], []), rec('b', ['faceon'], []), rec('c', ['faceon'], []), rec('d', ['faceon'], [turn]), rec('e', ['faceon'], [turn])]);
   assert.equal(fresh[0].status, 'new');

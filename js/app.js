@@ -725,20 +725,32 @@ async function renderHistory() {
       h('div', { class: 'muted' }, `누적 ${sessions.length}회 기록 기준 · ${CLUBS[state.club]}`),
       h('h3', {}, '먼저 고칠 것'),
       todo.length
-        ? todo.map((x, k) => h('div', { class: 'finding', onclick: () => { if (x.lastId) { state.detail = x.lastId; render(); } } },
-            h('div', { class: 'finding-head' }, `${k + 1}. ${x.title}`),
-            h('div', { class: 'evidence' },
-              h('span', { class: 'tag ' + STATUS[x.status][1] }, STATUS[x.status][0]),
-              h('span', { class: 'marks', title: '기록마다 나타났는지(오른쪽이 최근)' }, x.marks.map((m) => h('i', { class: m ? 'on' : '' }))),
-              `${x.total}회 중 ${x.count}회`),
-            h('div', { class: 'cue' }, '→ ' + x.advice)))
+        ? todo.map((x, k) => {
+            // 대표 사진: 이 패턴이 가장 최근에 나타난 기록에서, 차이가 가장 큰 지적의 구간 사진
+            const rec = sessions.find((q) => q.id === x.lastId);
+            const pick = rec && x.lastIssues.map((i) => ({ i, part: partsOf(rec).find((p) => p.view === i.view) }))
+              .find(({ i, part }) => PHASE_OF[i.key] && part?.shots && part?.pose);
+            const open = () => { state.detail = x.lastId; render(); };
+            return h('div', { class: 'finding' },
+              h('div', { class: 'finding-head' }, `${k + 1}. ${x.title}`),
+              h('div', { class: 'evidence' },
+                h('span', { class: 'tag ' + STATUS[x.status][1] }, STATUS[x.status][0]),
+                h('span', { class: 'marks', title: '기록마다 나타났는지(오른쪽이 최근)' }, x.marks.map((m) => h('i', { class: m ? 'on' : '' }))),
+                `${x.total}회 중 ${x.count}회`),
+              h('div', { class: 'phase rep' },
+                pick && h('div', { class: 'shot-wrap' }, shotCanvas(pick.part, PHASE_OF[pick.i.key], pick.i, rec.leftHanded)),
+                h('div', { class: 'notes' },
+                  h('div', { class: 'cue' }, '→ ' + x.advice),
+                  pick && h('div', { class: 'muted' }, `사진: ${fmtDate(rec.date)} ${VIEW_SHORT[pick.i.view]} ${PHASES[PHASE_OF[pick.i.key]]} · ${textFor(metricByKey[pick.i.key], pick.i.side, clubOf(rec)).title}`),
+                  x.lastId && h('button', { class: 'btn small', onclick: open }, '이 기록 보기'))));
+          })
         : h('p', { class: 'ok' }, '✓ 되풀이되는 문제가 없습니다'),
       better.length > 0 && h('div', { class: 'finding' }, h('div', { class: 'muted' }, '좋아지고 있는 것'),
         better.map((x) => h('p', { class: 'ok' }, `✓ ${x.title} · 최근 ${x.recentN}회 중 ${x.recentCount}회`))),
       tally && h('p', { class: 'muted' }, `가장 자주 나온 구질: ${tally[0]} (샷 기록 ${names.length}회 중 ${tally[1]}회)`),
       h('p', { class: 'muted' }, sessions.length < 3
         ? '기록이 3회 미만이라 한두 번의 스윙에 좌우됩니다. 기록이 쌓일수록 믿을 만해집니다.'
-        : '점은 기록마다 그 문제가 나타났는지를 뜻합니다(오른쪽이 최근). 항목을 누르면 가장 최근에 나타난 기록으로 갑니다.'));
+        : '점은 기록마다 그 문제가 나타났는지를 뜻합니다(오른쪽이 최근). 사진은 그 문제가 가장 최근에 나타난 기록의 것이며, 누르면 커집니다.'));
   }
 
   /** 샷 추이 카드: 핵심 지표가 처음보다 나아졌는지 한눈에 보여 주고, 항목별 그래프는 펼쳐서 본다. */

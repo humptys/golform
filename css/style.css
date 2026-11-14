@@ -229,3 +229,9 @@ canvas.shot { width: 100%; display: block; border-radius: 14px; background: #000
 .marks i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .marks i.on { background: var(--major); }
 .card > .finding[onclick], .card .finding { cursor: default; }
+
+.phase.rep { margin-top: 8px; }
+.phase.rep .shot-wrap { flex: 0 0 38%; max-width: 180px; }
+.phase.rep .notes .btn { margin-top: 8px; }
+.phase.rep .cue { margin-top: 0; }
+.phase.rep:not(.zoom) canvas.shot { max-height: 250px; object-fit: contain; }

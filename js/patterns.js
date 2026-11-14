@@ -75,7 +75,7 @@ const themeViews = (t) => {
 /**
  * 누적 기록에서 되풀이되는 패턴을 뽑아 우선순위를 매긴다.
  * @param history 시간순 기록 [{id, views: ['faceon','dtl'], issues: [{key, side, z, view}]}]
- * @returns [{id, title, advice, total, count, marks, recentCount, recentN, status, priority, lastId}]
+ * @returns [{id, title, advice, total, count, marks, recentCount, recentN, status, priority, lastId, lastIssues}]
  *   total: 그 패턴을 볼 수 있는 방향의 영상이 있던 기록 수 / count: 그중 패턴이 나타난 수
  *   marks: 기록마다 나타났는지(시간순, 최근 8회) / status: persistent(계속) | new(최근 생김) | improving(줄어듦) | sometimes(가끔)
  */
@@ -102,10 +102,13 @@ export function summarizeHistory(history) {
     const avgWeight = hits.filter((w) => w > 0).reduce((a, b) => a + b, 0) / count;
     // 최근에 자주, 크게 나타날수록 먼저. 최근 기록에 더 무게를 둔다.
     const priority = (recentRate * 0.6 + (count / eligible.length) * 0.4) * avgWeight;
+    const last = [...eligible].reverse().find((h, i) => hits[hits.length - 1 - i] > 0);
     out.push({
       id: t.id, title: t.title, advice: t.advice, total: eligible.length, count,
       marks: hits.slice(-8).map((w) => w > 0), recentCount: recent.filter((w) => w > 0).length, recentN, status, priority,
-      lastId: [...eligible].reverse().find((h, i) => hits[hits.length - 1 - i] > 0)?.id ?? null,
+      lastId: last?.id ?? null,
+      // 가장 최근에 나타난 기록에서 이 패턴에 해당하는 지적들(차이가 큰 순). 대표 사진을 고르는 데 쓴다.
+      lastIssues: last ? [...findPatterns(last.issues).find((x) => x.id === t.id).issues].sort((a, b) => Math.abs(b.z ?? 0) - Math.abs(a.z ?? 0)) : [],
     });
   }
   return out.sort((a, b) => b.priority - a.priority);
