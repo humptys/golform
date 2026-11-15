@@ -510,3 +510,30 @@ test('자가진단: 적은 글에서 주제를 찾고 누적 기록을 그 주�
   // 관련 자세가 한 번도 나오지 않은 경우
   assert.deepEqual(reviewConcern(CONCERNS.find((c) => c.id === 'tempo'), history).postures, []);
 });
+
+test('조언: 기록 요약과 내장 답변', async () => {
+  const { buildContext, localAnswer } = await import('../js/coach.js');
+  const turn = { key: 'fo_shoulder_turn_top', side: 'low', z: -3, view: 'faceon' };
+  const wing = { key: 'fo_lead_arm_impact', side: 'low', z: -2.4, view: 'faceon' };
+  const history = [
+    { id: 'a', views: ['faceon'], issues: [turn], shot: { carry: 180, dir: 1, sideSpin: 1500, backSpin: 2500, ballSpeed: 58, headSpeed: 41 }, name: '슬라이스' },
+    { id: 'b', views: ['faceon'], issues: [turn, wing], shot: { carry: 190, dir: 0, sideSpin: 1400, backSpin: 2500 }, name: '슬라이스' },
+  ];
+  const ctx = buildContext({ club: 'driver', history, concern: '슬라이스가 고민' });
+  assert.match(ctx, /클럽: 드라이버, 오른손잡이, 영상 분석 기록 2회/);
+  assert.match(ctx, /- 백스윙 회전이 부족하다: 2회 중 2회, 계속 나타남/);
+  assert.match(ctx, /가장 흔한 구질: 슬라이스 \(2회\)/);
+  assert.match(ctx, /가장 최근 샷: 캐리 190m/);
+  assert.match(ctx, /본인이 적은 고민: 슬라이스가 고민/);
+  assert.ok(ctx.length < 1500);
+  assert.match(buildContext({ club: 'iron', history: [] }), /아직 영상 분석 기록이 없습니다/);
+
+  const a = localAnswer('슬라이스 어떻게 고쳐요?', { club: 'driver', history });
+  assert.equal(a.matched, 1);
+  assert.match(a.text, /■ 슬라이스/);
+  assert.match(a.text, /2회 중 2회가 슬라이스 계열/);
+  assert.match(a.text, /어깨 회전이 부족합니다 \(2회 중 2회\) →/);
+  const none = localAnswer('슬라이스 어떻게 고쳐요?', { club: 'driver', history: [] });
+  assert.match(none.text, /일반적인 원인/);
+  assert.equal(localAnswer('오늘 날씨 어때?', { club: 'driver', history }).matched, 0);
+});

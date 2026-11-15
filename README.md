@@ -115,6 +115,26 @@ insert into public.golform_config (key, value) values ('ntfy_topic', '여기에-
 
 알림에는 "새 가입 요청이 있습니다"라는 문구만 담기고 가입자의 이메일은 보내지 않습니다. 알림 전송이 실패해도 가입과 승인 절차에는 영향이 없습니다.
 
+## 조언 탭과 무료 AI 설정 (선택)
+
+「조언」 탭에서 골프에 관한 질문을 대화 형식으로 할 수 있습니다. 두 단계로 동작합니다.
+
+- **내장 답변(설정 없이 동작)**: 질문의 낱말로 주제를 찾아, 앱에 들어 있는 설명과 내 기록으로 답을 만듭니다. 자유로운 문장은 이해하지 못합니다.
+- **무료 AI 답변(설정 필요)**: 무료 요금제를 제공하는 LLM 여러 곳(Google Gemini, Groq, OpenRouter 무료 모델)에 같은 질문과 내 기록 요약을 보내고, 답변들을 한 모델이 비교해 하나로 정리합니다. 어느 모델이 답했는지 답변 아래에 표시됩니다.
+
+API 키를 앱(공개된 파일)에 넣으면 누구나 가져다 쓸 수 있으므로, 키는 Supabase의 서버 함수에만 둡니다. 로그인한(승인제를 쓰면 승인된) 계정만 이 함수를 부를 수 있습니다.
+
+1. 무료 API 키를 발급받습니다. 하나만 있어도 동작하고, 둘 이상이면 답을 비교합니다. 모두 카드 등록 없이 가능합니다.
+   - Google AI Studio (aistudio.google.com) → Get API key
+   - Groq (console.groq.com) → API Keys
+   - OpenRouter (openrouter.ai) → Keys
+2. Supabase 대시보드 → **Edge Functions** → 새 함수를 만들고 이름을 `coach`로 합니다. 편집기에 [`supabase/functions/coach/index.ts`](supabase/functions/coach/index.ts) 내용을 붙여넣고 배포합니다.
+3. 함수 설정에서 **Verify JWT**를 끕니다(로그인 확인은 함수 안에서 직접 합니다).
+4. **Edge Functions → Secrets**에 발급받은 키를 넣습니다: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`.
+5. 앱의 「설정」에서 로그인한 뒤 「조언」 탭에서 질문합니다.
+
+모델 이름은 자주 바뀝니다. 기본 목록의 모델이 없어지면 다음 모델로 넘어가며, Secrets의 `GEMINI_MODELS`, `GROQ_MODELS`, `OPENROUTER_MODELS`(쉼표로 구분)로 바꿀 수 있습니다. 무료 요금제에는 하루 호출 한도가 있고, 질문과 기록 요약이 해당 회사로 전송됩니다(영상과 이메일은 보내지 않습니다).
+
 ## 참고 영상 링크
 
 지적 항목마다 교정 레슨과 기준 선수의 스윙을 찾는 유튜브 검색 링크가 붙습니다. 특정 영상 주소는 사라지거나 바뀌기 때문에 검색 결과로 연결합니다.
@@ -137,6 +157,8 @@ npm test                      # 구간 검출·측정·비교·동기화 규칙 
 | `js/textbook.js` | 내장 기준 「정석 폼」의 기준값 |
 | `js/annotate.js` | 구간 사진 위에 골격과 교정 표시 그리기 |
 | `js/patterns.js` | 정면·측면의 지적을 핵심 패턴으로 묶기 |
+| `js/coach.js` | 조언 탭: 모델에 넘길 기록 요약, 내장 답변 |
+| `supabase/functions/coach/index.ts` | 무료 LLM 여러 곳에 묻고 답을 비교·정리하는 서버 함수 |
 | `js/concerns.js` | 자가진단: 적은 고민에서 주제 찾기, 기록 재정리 |
 | `js/shot.js` | 샷 데이터 해석(구질 판정, 자세와의 연결) |
 | `js/ocr.js` | 캡처 화면에서 숫자 읽기 |

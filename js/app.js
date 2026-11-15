@@ -9,6 +9,7 @@ import { SHOT_FIELDS, SIDE_WORDS, buildShot, analyzeShot, diagnose, sidePercent,
 import { readShotImage } from './ocr.js';
 import { findPatterns, summarizeHistory } from './patterns.js';
 import { CONCERNS, matchConcerns, reviewConcern } from './concerns.js';
+import { buildContext, localAnswer } from './coach.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -25,6 +26,7 @@ const state = {
   // 슬로모션 여부는 영상마다 다르므로 기억하지 않는다. 켜진 채 남으면 템포가 조용히 빠지기 때문이다.
   leftHanded: !!prefs.leftHanded, slowmo: false, saveVideo: prefs.saveVideo !== false,
   busy: false, detail: null, onSyncStatus: null,
+  sub: null, // 설정 탭 안의 하위 화면('refs' = 기준 영상 관리)
 };
 const savePrefs = () => localStorage.setItem('golform-prefs', JSON.stringify({
   view: state.view, club: state.club, profile: state.profile, leftHanded: state.leftHanded, saveVideo: state.saveVideo,
@@ -391,7 +393,7 @@ async function renderAnalyze() {
       h('h3', {}, `${n} ${VIEWS[view]} 영상`),
       b.kind === 'none'
         ? [h('p', { class: 'muted' }, `「${state.profile}」에는 ${VIEWS[view]} 기준이 없습니다. 기준 스윙 영상을 등록하거나 「정석 폼」 기준을 선택하세요.`),
-           h('button', { class: 'btn small', onclick: () => { state.view = view; savePrefs(); go('refs'); } }, '기준 영상 등록하러 가기')]
+           h('button', { class: 'btn small', onclick: () => { state.view = view; savePrefs(); openRefs(); } }, '기준 영상 등록하러 가기')]
         : [h('p', { class: 'muted' }, view === 'faceon' ? '몸 정면에서 찍은 영상입니다.' : '타깃 반대편 뒤에서 찍은 영상입니다.'),
            h('div', { class: 'row' },
              filePicker('영상 선택', { onFiles: ([f]) => setPick(view, f) }),
@@ -551,6 +553,13 @@ async function resultView(s) {
 }
 
 // ───────── 기준 영상 탭 ─────────
+const refsBack = () => h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: () => { if (state.busy) return; state.sub = null; render(); } }, '← 설정'));
+function openRefs() {
+  if (state.busy) return alert('분석이 끝난 뒤 이동해 주세요.');
+  state.tab = 'settings'; state.sub = 'refs'; state.detail = null;
+  render();
+}
+
 async function renderRefs() {
   const allRefs = await db.getAll('refs');
   const refs = pickRefs(allRefs, state.view, state.profile, state.club);
@@ -562,7 +571,7 @@ async function renderRefs() {
       h('tr', {}, h('td', {}, `${PHASES[m.phase]} · ${m.label}`), h('td', {}, fmt(m, stats[m.key].mean)), h('td', {}, stats[m.key].n > 1 ? '±' + Math.max(m.floor, stats[m.key].std).toFixed(m.digits) : '-'))))));
   if (isBuiltin(state.profile)) {
     return mount(
-      h('h2', {}, '기준 영상'),
+      refsBack(), h('h2', {}, '기준 영상'),
       viewPicker(render), clubPicker(render),
       profilePicker(allRefs, render),
       h('div', { class: 'card' },
@@ -594,7 +603,7 @@ async function renderRefs() {
   };
 
   mount(
-    h('h2', {}, '기준 영상'),
+    refsBack(), h('h2', {}, '기준 영상'),
     viewPicker(render), clubPicker(render),
     profilePicker(allRefs, render),
     check('왼손잡이 스윙', 'leftHanded'),
@@ -884,6 +893,80 @@ async function renderHistory() {
   if (shots.length) drawShotTrend();
 }
 
+// ───────── 조언 탭 ─────────
+// 골프에 관한 질문에 대화 형식으로 답한다. 로그인돼 있고 서버 함수가 설치돼 있으면 여러 무료 LLM의 답을 비교해 정리한 답을,
+// 아니면 앱에 들어 있는 설명과 내 기록으로 만든 내장 답변을 보여 준다.
+const CHAT_KEY = 'golform-chat';
+const loadChat = () => { try { return JSON.parse(localStorage.getItem(CHAT_KEY)) ?? []; } catch { return []; } };
+const saveChat = (list) => { try { localStorage.setItem(CHAT_KEY, JSON.stringify(list.slice(-40))); } catch { /* 저장 실패는 무시 */ } };
+
+async function renderCoach() {
+  const chat = loadChat();
+  const all = (await db.getAll('sessions')).filter((s) => clubOf(s) === state.club).sort(byDate);
+  const history = all.map((s) => ({
+    id: s.id, views: partsOf(s).map((p) => p.view), issues: collectIssues(s), shot: s.shot ?? null,
+    name: s.shot ? analyzeShot(s.shot, { club: clubOf(s), leftHanded: s.leftHanded }).name : null,
+  }));
+  let concern = '';
+  try { concern = localStorage.getItem('golform-concern') ?? ''; } catch { /* 없음 */ }
+
+  const list = h('div', { class: 'chat' });
+  const bubble = (m) => h('div', { class: `msg ${m.role}` },
+    h('div', { class: 'bubble' }, m.text),
+    m.source && h('div', { class: 'muted src' }, m.source));
+  const draw = () => {
+    list.replaceChildren(...(chat.length ? chat.map(bubble) : [h('p', { class: 'muted' }, '스윙이나 샷에 대해 궁금한 점을 물어보세요. 쌓인 분석 기록을 참고해 답합니다.')]));
+    list.lastElementChild?.scrollIntoView({ block: 'end' });
+  };
+  const input = h('textarea', { rows: 1, placeholder: '예: 슬라이스를 줄이려면 뭘 먼저 고쳐야 해?' });
+  const sendBtn = h('button', { class: 'btn primary', onclick: () => send(input.value) }, '보내기');
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
+
+  async function send(text) {
+    const question = text.trim();
+    if (!question || sendBtn.disabled) return;
+    input.value = '';
+    sendBtn.disabled = true;
+    const before = chat.slice(-6).map(({ role, text: t }) => ({ role, text: t }));
+    chat.push({ role: 'user', text: question });
+    const waiting = { role: 'assistant', text: '답을 준비하는 중…' };
+    chat.push(waiting);
+    draw();
+    let reply;
+    try {
+      const r = await sync.askCoach({ question, context: buildContext({ club: state.club, leftHanded: state.leftHanded, history, concern }), history: before });
+      if (r) {
+        reply = { role: 'assistant', text: r.answer, source: r.models.length > 1
+          ? `무료 AI ${r.models.length}개의 답을 비교해 정리 · ${r.models.map((m) => m.split('/').pop().replace(/:free$/, '')).join(', ')}`
+          : `무료 AI 답변 · ${r.models[0].split('/').pop().replace(/:free$/, '')}` };
+      }
+    } catch (e) {
+      const local = localAnswer(question, { club: state.club, history });
+      reply = { role: 'assistant', text: local.text, source: `내장 답변 (AI 사용 불가: ${e.message})` };
+    }
+    if (!reply) {
+      const local = localAnswer(question, { club: state.club, history });
+      reply = { role: 'assistant', text: local.text, source: '내장 답변 · 설정에서 로그인하고 AI 조언을 설치하면 자유로운 질문에도 답합니다' };
+    }
+    chat[chat.indexOf(waiting)] = reply;
+    saveChat(chat);
+    sendBtn.disabled = false;
+    draw();
+  }
+
+  const samples = ['슬라이스를 줄이려면?', '비거리를 늘리려면 뭘 먼저 고쳐야 해?', '내 스윙에서 가장 큰 문제는?', '뒤땅이 자주 나는 이유는?'];
+  mount(
+    h('h2', {}, '조언'),
+    clubPicker(render),
+    h('p', { class: 'muted' }, `${CLUBS[state.club]} 기록 ${history.length}회를 참고합니다. 답변은 참고용이며, 영상으로 볼 수 없는 그립·클럽 페이스는 알지 못합니다.`),
+    list,
+    h('div', { class: 'chips quick' }, samples.map((q) => h('button', { class: 'chip', onclick: () => send(q) }, q))),
+    h('div', { class: 'composer' }, input, sendBtn),
+    chat.length > 0 && h('button', { class: 'btn small', onclick: () => { if (confirm('대화 내용을 지울까요?')) { chat.length = 0; saveChat(chat); draw(); } } }, '대화 지우기'),
+  );
+  draw();
+}
+
 // ───────── 설정 탭 ─────────
 function syncStatusText() {
   const st = sync.status;
@@ -996,8 +1079,12 @@ async function backupCard() {
 
 async function renderSettings() {
   state.onSyncStatus = null;
+  if (state.sub === 'refs') return renderRefs();
   mount(
     h('h2', {}, '설정'),
+    h('div', { class: 'card' }, h('h3', {}, '비교 기준'),
+      h('p', { class: 'muted' }, '분석은 내장된 「정석 폼」 기준으로 바로 됩니다. 특정 선수나 내 베스트 스윙을 기준으로 쓰고 싶을 때만 기준 영상을 등록하세요.'),
+      h('button', { class: 'btn', onclick: openRefs }, '기준 영상 관리')),
     h('p', { class: 'muted' }, `앱 버전 v${VERSION}. 새 기능이 안 보이면 이 번호가 안내받은 번호와 같은지 확인하고, 다르면 잠시 뒤 새로고침하세요.`),
     await syncCard(),
     await backupCard(),
@@ -1027,11 +1114,12 @@ async function renderSettings() {
 }
 
 // ───────── 라우팅 ─────────
-const TABS = { analyze: renderAnalyze, history: renderHistory, refs: renderRefs, settings: renderSettings };
+const TABS = { analyze: renderAnalyze, history: renderHistory, coach: renderCoach, settings: renderSettings };
 function go(tab) {
   if (state.busy) return alert('분석이 끝난 뒤 이동해 주세요.');
   state.tab = tab;
   state.detail = null;
+  state.sub = null;
   render();
 }
 async function render() {

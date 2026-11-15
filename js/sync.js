@@ -134,6 +134,23 @@ export async function setApproved(userId, approved) {
   emit();
 }
 
+/**
+ * 조언 탭: 서버 함수(supabase/functions/coach)에 질문을 보낸다. 로그인하지 않았으면 null.
+ * @returns {answer, models, judgedBy, failed} | null
+ * @throws 함수가 설치되지 않았거나 모델이 답하지 못했을 때 (code: 'not-installed' | 'failed')
+ */
+export async function askCoach(payload) {
+  const user = await getUser();
+  if (!user) return null;
+  const { data, error } = await client.functions.invoke('coach', { body: payload });
+  if (!error) return data;
+  let status = error.context?.status ?? 0, message = error.message;
+  try { message = (await error.context.json()).error ?? message; } catch { /* 본문이 없는 오류 */ }
+  const e = new Error(status === 404 ? 'AI 조언 기능이 서버에 설치되지 않았습니다.' : message);
+  e.code = status === 404 ? 'not-installed' : 'failed';
+  throw e;
+}
+
 const localSide = {
   async all() {
     const out = [];

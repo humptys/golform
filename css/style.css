@@ -242,3 +242,16 @@ textarea:focus { border-color: var(--accent); }
 .chips.quick { margin: 4px 0 12px; }
 .chips.quick .chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; }
 .concern > div:last-child:not(:empty) { margin-top: 14px; }
+
+/* 조언 탭: 대화 */
+.chat { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.msg { display: flex; flex-direction: column; max-width: 88%; }
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.assistant { align-self: flex-start; }
+.bubble { padding: 12px 14px; border-radius: 18px; font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 6px; }
+.msg.assistant .bubble { background: var(--card); box-shadow: var(--shadow); border-bottom-left-radius: 6px; }
+.msg .src { font-size: 11px; margin: 4px 6px 0; }
+.composer { display: flex; gap: 8px; align-items: flex-end; margin: 10px 0; }
+.composer textarea { margin: 0; min-height: 46px; max-height: 140px; background: var(--card); box-shadow: var(--shadow); }
+.composer .btn { flex: none; }
