@@ -8,6 +8,7 @@ import { sourcesFor } from './sources.js';
 import { SHOT_FIELDS, SIDE_WORDS, buildShot, analyzeShot, diagnose, sidePercent, smashFactor, fmtShot } from './shot.js';
 import { readShotImage } from './ocr.js';
 import { findPatterns, summarizeHistory } from './patterns.js';
+import { CONCERNS, matchConcerns, reviewConcern } from './concerns.js';
 import { textbookStats, publishedStats, SOURCES } from './textbook.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
@@ -753,6 +754,66 @@ async function renderHistory() {
         : '점은 기록마다 그 문제가 나타났는지를 뜻합니다(오른쪽이 최근). 사진은 그 문제가 가장 최근에 나타난 기록의 것이며, 누르면 커집니다.'));
   }
 
+  /** 자가진단 카드: 고치고 싶은 점을 적으면 쌓인 기록을 그 문제 기준으로 다시 정리한다. */
+  function concernCard() {
+    const KEY = 'golform-concern';
+    const box = h('div');
+    const input = h('textarea', { rows: 2, placeholder: '예: 드라이버 슬라이스가 심하고 비거리가 안 나와요' });
+    try { input.value = localStorage.getItem(KEY) ?? ''; } catch { /* 저장소를 쓸 수 없으면 빈 칸으로 시작 */ }
+    const history = sessions.map((s) => ({
+      id: s.id, views: partsOf(s).map((p) => p.view), issues: collectIssues(s), shot: s.shot ?? null,
+      name: s.shot ? analyzeShot(s.shot, { club: clubOf(s), leftHanded: s.leftHanded }).name : null,
+    }));
+    const posture = (p) => {
+      const rec = sessions.find((q) => q.id === p.last.id);
+      const part = rec && partsOf(rec).find((x) => x.view === p.last.issue.view);
+      const m = metricByKey[p.key];
+      const t = textFor(m, p.side, state.club);
+      const phase = PHASE_OF[p.key];
+      return h('div', { class: 'phase rep' },
+        phase && part?.shots && part?.pose && h('div', { class: 'shot-wrap' }, shotCanvas(part, phase, p.last.issue, rec.leftHanded)),
+        h('div', { class: 'notes' },
+          h('b', {}, t.title),
+          h('div', { class: 'evidence' }, h('span', { class: 'marks' }, p.marks.map((on) => h('i', { class: on ? 'on' : '' }))), `${p.total}회 중 ${p.count}회`),
+          h('div', { class: 'cue' }, '→ ' + t.cue),
+          h('button', { class: 'btn small', onclick: () => { state.detail = p.last.id; render(); } }, '이 기록 보기')));
+    };
+    const show = () => {
+      const text = input.value.trim();
+      try { localStorage.setItem(KEY, text); } catch { /* 저장 실패는 무시: 이번 화면에서는 그대로 정리한다 */ }
+      if (!text) return box.replaceChildren();
+      const found = matchConcerns(text);
+      if (!found.length) {
+        return box.replaceChildren(h('p', { class: 'warn-text' }, '적으신 내용에서 정리할 주제를 찾지 못했습니다. 아래 낱말 중 하나를 넣어 다시 적어 보세요: ' + CONCERNS.map((c) => c.label).join(', ')));
+      }
+      if (!sessions.length) return box.replaceChildren(h('p', { class: 'muted' }, `주제: ${found.map((c) => c.label).join(', ')}. 분석 기록이 쌓이면 이 문제 기준으로 정리해 드립니다.`));
+      box.replaceChildren(h('div', {}, found.map((c) => {
+        const r = reviewConcern(c, history);
+        return h('div', { class: 'finding' },
+          h('div', { class: 'finding-head' }, c.label),
+          h('p', { class: 'muted' }, c.note),
+          r.shotLines.length > 0 && h('ul', {}, r.shotLines.map((l) => h('li', {}, l))),
+          r.postures.length
+            ? [h('p', {}, `이 문제와 관련된 자세가 기록 ${r.sessions}회 중 ${r.withAny}회에서 보였습니다. 자주, 크게 나타난 순입니다.`),
+               r.postures.slice(0, 3).map(posture)]
+            : h('p', { class: 'muted' }, r.sessions
+                ? `기록 ${r.sessions}회의 영상에서는 이 문제와 연결되는 자세가 보이지 않았습니다. 그립이나 클럽 페이스처럼 영상으로 볼 수 없는 요인이거나, 다른 방향(정면/측면)에서 찍어야 보이는 동작일 수 있습니다.`
+                : '이 문제를 볼 수 있는 방향의 영상 기록이 아직 없습니다.'));
+      }), h('p', { class: 'muted' }, '적은 글의 낱말로 주제를 찾아 정리한 것이며, 문장의 뜻을 이해하는 것은 아닙니다. 자세와 문제의 연결은 흔히 함께 나타나는 조합에 근거한 추정입니다.')));
+    };
+    const quick = h('div', { class: 'chips quick' }, CONCERNS.map((c) => h('button', { class: 'chip', onclick: () => {
+      if (!input.value.includes(c.label)) input.value = (input.value.trim() ? input.value.trim() + ', ' : '') + c.label;
+      show();
+    } }, c.label)));
+    if (input.value.trim()) show();
+    return h('div', { class: 'card concern' },
+      h('h3', {}, '자가진단'),
+      h('p', { class: 'muted' }, '고치고 싶은 점이나 스스로 느끼는 문제를 적으면, 쌓인 기록을 그 문제 기준으로 다시 정리합니다.'),
+      input, quick,
+      h('button', { class: 'btn primary', onclick: show }, '이 문제 기준으로 정리'),
+      box);
+  }
+
   /** 샷 추이 카드: 핵심 지표가 처음보다 나아졌는지 한눈에 보여 주고, 항목별 그래프는 펼쳐서 본다. */
   function shotCard() {
     const title = h('h3', {}, `샷 추이 · ${CLUBS[state.club]}`);
@@ -802,6 +863,7 @@ async function renderHistory() {
     profilePicker(allRefs, render),
     sessions.length === 0 && h('p', { class: 'muted' }, `「${state.profile}」 기준의 ${CLUBS[state.club]} 분석 기록이 아직 없습니다.`),
     sessions.length > 0 && priorityCard(),
+    concernCard(),
     sessions.length > 0 && [
       h('div', { class: 'card' }, h('h3', {}, '점수 추이'),
         scored.length ? trendChart(scored.map((s) => ({ v: s.score, label: fmtDate(s.date) })), { min: 0, max: 100 }) : h('p', { class: 'muted' }, '데이터가 없습니다.'),

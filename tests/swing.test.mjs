@@ -475,3 +475,38 @@ test('누적 요약: 되풀이되는 패턴을 최근·빈도·크기 순으로 
   assert.equal(fresh[0].status, 'new');
   assert.deepEqual(summarizeHistory([]), []);
 });
+
+test('자가진단: 적은 글에서 주제를 찾고 누적 기록을 그 주제로 다시 정리한다', async () => {
+  const { matchConcerns, reviewConcern, CONCERNS } = await import('../js/concerns.js');
+  const { metricByKey } = await import('../js/metrics.js');
+  assert.deepEqual(matchConcerns('드라이버가 자꾸 슬라이스가 나고 비거리도 안 나가요').map((c) => c.id), ['slice', 'distance']);
+  assert.deepEqual(matchConcerns('임팩트 때 배치기가 심하고 헤드업').map((c) => c.id), ['standup']);
+  assert.deepEqual(matchConcerns('뒤땅이 너무 많이 나요').map((c) => c.id), ['contact']);
+  assert.deepEqual(matchConcerns('그냥 잘 치고 싶다'), []);
+  // 화면의 빠른 선택 버튼은 주제 이름을 그대로 적어 넣으므로, 이름만으로도 그 주제가 잡혀야 한다
+  for (const c of CONCERNS) assert.ok(matchConcerns(c.label).some((x) => x.id === c.id), c.label);
+  // 모든 주제의 근거 항목은 실제 측정 항목이어야 한다
+  for (const c of CONCERNS) for (const k of c.keys) assert.ok(metricByKey[k.split(':')[0]] && /:(low|high)$/.test(k), `${c.id} ${k}`);
+
+  const wing = { key: 'fo_lead_arm_impact', side: 'low', z: -2.4, view: 'faceon' };
+  const turn = { key: 'fo_shoulder_turn_top', side: 'low', z: -3, view: 'faceon' };
+  const stand = { key: 'dtl_spine_change_impact', side: 'low', z: -2, view: 'dtl' };
+  const history = [
+    { id: 'a', views: ['faceon'], issues: [turn], shot: { carry: 180, dir: 1, sideSpin: 900, backSpin: 2500 }, name: '페이드' },
+    { id: 'b', views: ['faceon'], issues: [turn, wing], shot: { carry: 185, dir: 0, sideSpin: 1500, backSpin: 2500 }, name: '슬라이스' },
+    { id: 'c', views: ['faceon', 'dtl'], issues: [wing, stand], shot: { carry: 196, dir: 0, sideSpin: 100, backSpin: 2500 }, name: '스트레이트' },
+  ];
+  const slice = reviewConcern(CONCERNS.find((c) => c.id === 'slice'), history);
+  assert.deepEqual([slice.sessions, slice.withAny], [3, 3]);
+  assert.deepEqual(slice.postures.map((p) => `${p.key}:${p.count}/${p.total}`), ['fo_shoulder_turn_top:2/3', 'fo_lead_arm_impact:2/3']);
+  assert.deepEqual(slice.postures[1].marks, [false, true, true]);
+  assert.equal(slice.postures[1].last.id, 'c');
+  assert.match(slice.shotLines[0], /3회 중 2회가 슬라이스 계열/);
+  const dist = reviewConcern(CONCERNS.find((c) => c.id === 'distance'), history);
+  assert.match(dist.shotLines[0], /캐리: 처음 180m → 최근 196m \(3회\)/);
+  // 측면에서만 보이는 주제는 측면 영상이 있던 기록만 센다
+  const up = reviewConcern(CONCERNS.find((c) => c.id === 'standup'), history);
+  assert.equal(up.postures[0].total, 1);
+  // 관련 자세가 한 번도 나오지 않은 경우
+  assert.deepEqual(reviewConcern(CONCERNS.find((c) => c.id === 'tempo'), history).postures, []);
+});

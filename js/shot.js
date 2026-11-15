@@ -47,7 +47,7 @@ export const fmtShot = (f, v) => (f.key === 'side' ? `${v >= 0 ? 'R' : 'L'}${Mat
 
 // 구질·탄도의 각 특징과 흔히 함께 나타나는 자세 문제, 그리고 그 자세가 왜 그런 공을 만드는지.
 // 키는 '측정항목:방향'(low = 기준보다 작음, high = 큼)이며 자세 분석의 지적과 맞춰 본다.
-const CAUSES = {
+export const CAUSES = {
   push: {
     'fo_hip_shift_impact:high': '골반이 타깃 쪽으로 밀리면 클럽이 뒤처져 페이스가 열린 채 맞습니다.',
     'dtl_hip_thrust_impact:high': '골반이 공 쪽으로 나오면 팔이 지나갈 공간이 막혀 클럽이 안에서 밖으로 밀려 나갑니다.',
