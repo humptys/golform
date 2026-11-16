@@ -923,8 +923,13 @@ async function renderCoach() {
   const sendBtn = h('button', { class: 'btn primary', onclick: () => send(input.value) }, '보내기');
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
   const list = h('div', { class: 'chat' });
+  // 모델이 꾸밈 기호를 섞어 보내도 읽기 좋게: **굵게**만 굵은 글씨로 바꾸고, 제목 기호(#)와 숫자 이모지는 평범한 글자로 바꾼다
+  const rich = (text) => String(text)
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/([0-9])\uFE0F?\u20E3/g, '$1.')
+    .split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? h('b', {}, part) : part));
   const bubble = (m) => h('div', { class: `msg ${m.role}` },
-    h('div', { class: 'bubble' }, m.text),
+    h('div', { class: 'bubble' }, m.role === 'assistant' ? rich(m.text) : m.text),
     m.source && h('div', { class: 'muted src' }, m.source));
   const draw = () => {
     sendBtn.disabled = coach.busy;

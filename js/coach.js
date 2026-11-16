@@ -15,13 +15,18 @@ export function buildContext({ club, leftHanded = false, history = [], concern =
   const patterns = summarizeHistory(history).slice(0, 4);
   if (patterns.length) {
     lines.push('영상에서 되풀이된 자세 문제(자주·크게 나타난 순):');
-    for (const p of patterns) lines.push(`- ${p.title}: ${p.total}회 중 ${p.count}회, ${STATUS[p.status]}`);
+    // 앱이 권하는 교정 방법을 함께 넘겨, 모델이 연습법을 지어내지 않고 이것을 근거로 답하게 한다
+    for (const p of patterns) lines.push(`- ${p.title}: ${p.total}회 중 ${p.count}회, ${STATUS[p.status]}. 교정 방법: ${p.advice}`);
   } else if (history.length) {
     lines.push('영상에서 되풀이된 자세 문제: 없음');
   }
   const latest = history.at(-1);
   if (latest?.issues.length) {
-    lines.push('가장 최근 분석의 지적: ' + latest.issues.slice(0, 6).map((i) => textFor(metricByKey[i.key], i.side, club).title).join('; '));
+    lines.push('가장 최근 분석의 지적과 연습법:');
+    for (const i of latest.issues.slice(0, 5)) {
+      const t = textFor(metricByKey[i.key], i.side, club);
+      lines.push(`- ${t.title}: ${t.fix}` + (t.drill ? ` (연습법: ${t.drill})` : ''));
+    }
   }
   const shots = history.filter((h) => h.shot);
   if (shots.length) {

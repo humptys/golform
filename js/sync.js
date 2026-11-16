@@ -142,8 +142,18 @@ export async function setApproved(userId, approved) {
 export async function askCoach(payload) {
   const user = await getUser();
   if (!user) return null;
-  const { data, error } = await client.functions.invoke('coach', { body: payload });
+  let { data, error } = await client.functions.invoke('coach', { body: payload });
+  // 서버에 닿지도 못한 경우(잠깐 끊긴 연결, 함수가 막 다시 배포된 직후 등)는 한 번 더 시도한다
+  if (error && error.context?.status == null) {
+    await new Promise((r) => setTimeout(r, 1200));
+    ({ data, error } = await client.functions.invoke('coach', { body: payload }));
+  }
   if (!error) return data;
+  if (error.context?.status == null) {
+    const e = new Error('서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 잠시 뒤 다시 질문해 주세요.');
+    e.code = 'failed';
+    throw e;
+  }
   let status = error.context?.status ?? 0, message = error.message;
   try { message = (await error.context.json()).error ?? message; } catch { /* 본문이 없는 오류 */ }
   const e = new Error(status === 404 ? 'AI 조언 기능이 서버에 설치되지 않았습니다.' : message);

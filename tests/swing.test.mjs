@@ -522,10 +522,12 @@ test('조언: 기록 요약과 내장 답변', async () => {
   const ctx = buildContext({ club: 'driver', history, concern: '슬라이스가 고민' });
   assert.match(ctx, /클럽: 드라이버, 오른손잡이, 영상 분석 기록 2회/);
   assert.match(ctx, /- 백스윙 회전이 부족하다: 2회 중 2회, 계속 나타남/);
+  assert.match(ctx, /교정 방법: 앞쪽 어깨가 턱 밑으로/); // 모델이 근거로 삼을 연습법이 함께 들어간다
+  assert.match(ctx, /가장 최근 분석의 지적과 연습법:\n- 어깨 회전이 부족합니다: .*\(연습법: 클럽을 어깨에 걸치고/);
   assert.match(ctx, /가장 흔한 구질: 슬라이스 \(2회\)/);
   assert.match(ctx, /가장 최근 샷: 캐리 190m/);
   assert.match(ctx, /본인이 적은 고민: 슬라이스가 고민/);
-  assert.ok(ctx.length < 1500);
+  assert.ok(ctx.length < 2400, String(ctx.length));
   assert.match(buildContext({ club: 'iron', history: [] }), /아직 영상 분석 기록이 없습니다/);
 
   const a = localAnswer('슬라이스 어떻게 고쳐요?', { club: 'driver', history });
