@@ -949,9 +949,10 @@ async function renderCoach() {
       const r = loggedIn ? await sync.askCoach({ question, context: buildContext({ club: state.club, leftHanded: state.leftHanded, history, concern }), history: before }) : null;
       if (r) {
         const short = (m) => m.split('/').pop().replace(/:free$/, '');
-        reply = { role: 'assistant', text: r.answer, source: r.models.length > 1
+        const took = Number.isFinite(r.ms) ? ` · ${(r.ms / 1000).toFixed(1)}초` : '';
+        reply = { role: 'assistant', text: r.answer, source: (r.models.length > 1
           ? `무료 AI ${r.models.length}개의 답을 비교해 정리 · ${r.models.map(short).join(', ')}`
-          : `무료 AI 답변 · ${short(r.models[0])}` };
+          : `무료 AI 답변 · ${short(r.models[0])}`) + took };
       }
     } catch (e) {
       reply = { role: 'assistant', text: localAnswer(question, { club: state.club, history }).text, source: `내장 답변 (AI 사용 불가: ${e.message})` };

@@ -65,8 +65,10 @@ const PROVIDERS = {
     return { text: (json?.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('').trim(), model };
   },
   async groq(fetchFn, key, model, system, messages) {
+    // gpt-oss는 답하기 전에 추론을 길게 하는 모델이라 그대로 두면 느리다. 추론을 낮게 두고, 추론에 쓰이는 몫만큼 길이 상한을 늘린다.
+    const reasoning = /gpt-oss/.test(model) ? { reasoning_effort: 'low', max_tokens: MAX_TOKENS + 600 } : {};
     const json = await post(fetchFn, 'https://api.groq.com/openai/v1/chat/completions', { Authorization: `Bearer ${key}` }, {
-      model, messages: [{ role: 'system', content: system }, ...messages], max_tokens: MAX_TOKENS, temperature: 0.4,
+      model, messages: [{ role: 'system', content: system }, ...messages], max_tokens: MAX_TOKENS, temperature: 0.4, ...reasoning,
     });
     return { text: (json?.choices?.[0]?.message?.content ?? '').trim(), model: json?.model ?? model };
   },
@@ -90,8 +92,9 @@ export async function askProvider(provider, env, fetchFn, system, messages) {
   let lastError = '모델 없음';
   for (const model of modelsOf(env, provider)) {
     try {
+      const t0 = Date.now();
       const r = await PROVIDERS[provider](fetchFn, key, model, system, messages);
-      if (r.text) return { provider, model: r.model, text: r.text };
+      if (r.text) return { provider, model: r.model, text: r.text, ms: Date.now() - t0 };
       lastError = '빈 답변';
     } catch (e) {
       lastError = e?.name === 'AbortError' ? '시간 초과' : String(e?.message ?? e);
@@ -102,7 +105,7 @@ export async function askProvider(provider, env, fetchFn, system, messages) {
 
 /**
  * 설정된 모든 제공자에 동시에 묻고, 답이 둘 이상이면 한 모델에게 비교·정리를 맡긴다.
- * @returns {answer, models: [답한 모델], judgedBy: 정리한 모델 | null, failed: [{provider, error}]}
+ * @returns {answer, models: [답한 모델], judgedBy: 정리한 모델 | null, failed: [{provider, error}], ms: 전체 소요 시간, each: {모델: 소요 시간}}
  */
 // 답을 정리(심사)할 때 먼저 맡길 순서: 응답이 빠른 곳부터
 const PRIORITY = ['groq', 'gemini', 'openrouter'];
@@ -136,7 +139,8 @@ export async function answer(question, context, history, env, fetchFn) {
     ...asked.filter((p) => !results.some((r) => r.provider === p)).map((provider) => ({ provider, error: '응답이 늦어 제외' })),
   ].sort((a, b) => PRIORITY.indexOf(a.provider) - PRIORITY.indexOf(b.provider));
   if (!ok.length) throw new Error('모든 모델이 답하지 못했습니다: ' + failed.map((f) => `${f.provider} ${f.error}`).join(' / '));
-  if (ok.length === 1) return { answer: ok[0].text, models: [ok[0].model], judgedBy: null, failed };
+  const timing = () => ({ ms: Date.now() - started, each: Object.fromEntries(ok.map((r) => [r.model, r.ms])) });
+  if (ok.length === 1) return { answer: ok[0].text, models: [ok[0].model], judgedBy: null, failed, ...timing() };
 
   // 여러 답을 비교해 하나로 정리한다. 답변자와 심사자가 겹치지 않도록 후보 이름은 가린다.
   const judgeSystem = `당신은 골프 지도 내용을 검토하는 편집자입니다. 같은 질문에 대한 답변 후보들을 비교해 최종 답 하나를 만듭니다.
@@ -149,9 +153,9 @@ export async function answer(question, context, history, env, fetchFn) {
   }];
   for (const r of ok) {
     const j = await askProvider(r.provider, env, fetchFn, judgeSystem, judgeMessages);
-    if (j?.text) return { answer: j.text, models: ok.map((x) => x.model), judgedBy: j.model, failed };
+    if (j?.text) return { answer: j.text, models: ok.map((x) => x.model), judgedBy: j.model, failed, ...timing() };
   }
-  return { answer: ok[0].text, models: [ok[0].model], judgedBy: null, failed }; // 정리에 실패하면 첫 답을 그대로 쓴다
+  return { answer: ok[0].text, models: [ok[0].model], judgedBy: null, failed, ...timing() }; // 정리에 실패하면 첫 답을 그대로 쓴다
 }
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });

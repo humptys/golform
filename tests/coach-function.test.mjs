@@ -14,7 +14,7 @@ function fakeFetch(replies, { user = true, approved = true } = {}) {
     const model = provider === 'gemini' ? url.match(/models\/([^:]+):/)[1] : body.model;
     const prompt = provider === 'gemini' ? body.contents.at(-1).parts[0].text : body.messages.at(-1).content;
     const system = provider === 'gemini' ? body.systemInstruction.parts[0].text : body.messages[0].content;
-    calls.push({ provider, model, prompt, system });
+    calls.push({ provider, model, prompt, system, body });
     let r = replies[provider];
     if (typeof r === 'function') r = r({ model, prompt, system });
     if (r instanceof Error) return res(Number(r.message) || 500, { error: { message: 'boom' } });
@@ -62,6 +62,7 @@ test('키가 있는 제공자만 부르고, 키가 없거나 모두 실패하면
   const f = fakeFetch({ groq: '그록 답' });
   const r = await answer('q', '', [], { GROQ_API_KEY: 'q' }, f);
   assert.deepEqual([r.answer, r.models.length], ['그록 답', 1]);
+  assert.ok(Number.isFinite(r.ms) && Number.isFinite(r.each['openai/gpt-oss-120b']));
   assert.deepEqual([...new Set(f.calls.map((c) => c.provider))], ['groq']);
   await assert.rejects(answer('q', '', [], {}, fakeFetch({})), /API 키가 하나도/);
   await assert.rejects(answer('q', '', [], { GROQ_API_KEY: 'q' }, fakeFetch({ groq: new Error('429') })), /모든 모델이 답하지 못했습니다: groq 429/);
@@ -107,4 +108,16 @@ test('느린 한 곳을 끝까지 기다리지 않는다', async () => {
   const one = await answer('q', '', [], { ...KEYS, COACH_DEADLINE_MS: '60' }, verySlow);
   assert.ok(Date.now() - t1 < 350, `took ${Date.now() - t1}ms`);
   assert.deepEqual([one.answer, one.judgedBy], ['그록 답', null]);
+});
+
+test('추론형 모델은 추론을 낮게 두고, 그 설정을 거절당하면 다음 모델로 넘어간다', async () => {
+  const f = fakeFetch({ groq: '답' });
+  await answer('q', '', [], { GROQ_API_KEY: 'q' }, f);
+  assert.equal(f.calls[0].body.reasoning_effort, 'low');
+  assert.ok(f.calls[0].body.max_tokens > 700);
+  // 서버가 그 설정을 모른다고 400을 돌려주는 경우
+  const g = fakeFetch({ groq: ({ model }) => (model.includes('gpt-oss') ? new Error('400') : '라마 답') });
+  const r = await answer('q', '', [], { GROQ_API_KEY: 'q' }, g);
+  assert.deepEqual([r.answer, r.models[0]], ['라마 답', 'llama-3.3-70b-versatile']);
+  assert.equal(g.calls.at(-1).body.reasoning_effort, undefined);
 });
