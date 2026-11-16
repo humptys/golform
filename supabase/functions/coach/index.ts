@@ -15,8 +15,12 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
-const TIMEOUT_MS = 25000;
-const MAX_TOKENS = 900;
+const TIMEOUT_MS = 15000; // 모델 하나를 기다리는 최대 시간
+const MAX_TOKENS = 700;
+// 답을 모으는 규칙: 두 곳이 답하면 나머지는 GRACE_MS만 더 기다리고, 한 곳만 답했어도 DEADLINE_MS가 지나면 그 답으로 진행한다.
+// 느린 한 곳 때문에 전체가 늦어지지 않게 하기 위함이다. (비밀값 COACH_GRACE_MS, COACH_DEADLINE_MS로 바꿀 수 있다)
+const GRACE_MS = 2500;
+const DEADLINE_MS = 12000;
 
 export const SYSTEM = `당신은 아마추어 골퍼를 돕는 골프 스윙 코치입니다.
 - 한국어 존댓말로, 핵심부터 8문장 이내로 답합니다.
@@ -100,12 +104,37 @@ export async function askProvider(provider, env, fetchFn, system, messages) {
  * 설정된 모든 제공자에 동시에 묻고, 답이 둘 이상이면 한 모델에게 비교·정리를 맡긴다.
  * @returns {answer, models: [답한 모델], judgedBy: 정리한 모델 | null, failed: [{provider, error}]}
  */
+// 답을 정리(심사)할 때 먼저 맡길 순서: 응답이 빠른 곳부터
+const PRIORITY = ['groq', 'gemini', 'openrouter'];
+
 export async function answer(question, context, history, env, fetchFn) {
+  const started = Date.now();
   const messages = buildMessages(question, context, history);
-  const results = (await Promise.all(Object.keys(PROVIDERS).map((p) => askProvider(p, env, fetchFn, SYSTEM, messages)))).filter(Boolean);
-  const ok = results.filter((r) => r.text);
-  const failed = results.filter((r) => r.error).map(({ provider, error }) => ({ provider, error }));
-  if (!results.length) throw new Error('API 키가 하나도 설정되지 않았습니다. 함수의 Secrets에 GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY 중 하나 이상을 넣어 주세요.');
+  const asked = Object.keys(PROVIDERS).filter((p) => env[KEY_OF[p]]);
+  if (!asked.length) throw new Error('API 키가 하나도 설정되지 않았습니다. 함수의 Secrets에 GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY 중 하나 이상을 넣어 주세요.');
+  const results = [];
+  await new Promise((resolve) => {
+    const grace = Number(env.COACH_GRACE_MS ?? GRACE_MS), deadline = Number(env.COACH_DEADLINE_MS ?? DEADLINE_MS);
+    let graceTimer = null;
+    const deadlineTimer = setTimeout(() => { if (results.some((r) => r.text)) finish(); }, deadline);
+    const finish = () => { clearTimeout(graceTimer); clearTimeout(deadlineTimer); resolve(); };
+    let pending = asked.length;
+    for (const p of asked) {
+      askProvider(p, env, fetchFn, SYSTEM, messages).then((r) => {
+        results.push(r);
+        pending--;
+        const okCount = results.filter((x) => x.text).length;
+        if (pending === 0) finish();
+        else if (okCount >= 2 && !graceTimer) graceTimer = setTimeout(finish, grace);
+        else if (okCount >= 1 && Date.now() - started > deadline) finish();
+      });
+    }
+  });
+  const ok = PRIORITY.flatMap((p) => results.filter((r) => r.provider === p && r.text)); // 빠른 곳이 정리를 맡도록 정해 둔 순서
+  const failed = [
+    ...results.filter((r) => r.error).map(({ provider, error }) => ({ provider, error })),
+    ...asked.filter((p) => !results.some((r) => r.provider === p)).map((provider) => ({ provider, error: '응답이 늦어 제외' })),
+  ].sort((a, b) => PRIORITY.indexOf(a.provider) - PRIORITY.indexOf(b.provider));
   if (!ok.length) throw new Error('모든 모델이 답하지 못했습니다: ' + failed.map((f) => `${f.provider} ${f.error}`).join(' / '));
   if (ok.length === 1) return { answer: ok[0].text, models: [ok[0].model], judgedBy: null, failed };
 

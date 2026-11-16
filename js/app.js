@@ -897,11 +897,20 @@ async function renderHistory() {
 // 골프에 관한 질문에 대화 형식으로 답한다. 로그인돼 있고 서버 함수가 설치돼 있으면 여러 무료 LLM의 답을 비교해 정리한 답을,
 // 아니면 앱에 들어 있는 설명과 내 기록으로 만든 내장 답변을 보여 준다.
 const CHAT_KEY = 'golform-chat';
-const loadChat = () => { try { return JSON.parse(localStorage.getItem(CHAT_KEY)) ?? []; } catch { return []; } };
+const loadChat = () => {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(CHAT_KEY)) ?? []; } catch { /* 빈 대화로 시작 */ }
+  // 답을 기다리던 중에 앱이 닫혔다면 그 사실을 남긴다
+  return list.map((m) => (m.pending ? { role: 'assistant', text: '답을 받기 전에 앱이 닫혔습니다. 다시 질문해 주세요.' } : m));
+};
 const saveChat = (list) => { try { localStorage.setItem(CHAT_KEY, JSON.stringify(list.slice(-40))); } catch { /* 저장 실패는 무시 */ } };
 
+// 대화와 진행 중인 질문은 화면이 아니라 여기에 둔다. 답을 기다리는 동안 다른 탭에 다녀와도 질문과 답이 사라지지 않는다.
+const coach = { chat: loadChat(), busy: false, redraw: null };
+
 async function renderCoach() {
-  const chat = loadChat();
+  const chat = coach.chat;
+  tabs.querySelector('[data-tab=coach]')?.classList.remove('has-badge');
   const all = (await db.getAll('sessions')).filter((s) => clubOf(s) === state.club).sort(byDate);
   const history = all.map((s) => ({
     id: s.id, views: partsOf(s).map((p) => p.view), issues: collectIssues(s), shot: s.shot ?? null,
@@ -910,48 +919,51 @@ async function renderCoach() {
   let concern = '';
   try { concern = localStorage.getItem('golform-concern') ?? ''; } catch { /* 없음 */ }
 
+  const input = h('textarea', { rows: 1, placeholder: '예: 슬라이스를 줄이려면 뭘 먼저 고쳐야 해?' });
+  const sendBtn = h('button', { class: 'btn primary', onclick: () => send(input.value) }, '보내기');
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
   const list = h('div', { class: 'chat' });
   const bubble = (m) => h('div', { class: `msg ${m.role}` },
     h('div', { class: 'bubble' }, m.text),
     m.source && h('div', { class: 'muted src' }, m.source));
   const draw = () => {
+    sendBtn.disabled = coach.busy;
     list.replaceChildren(...(chat.length ? chat.map(bubble) : [h('p', { class: 'muted' }, '스윙이나 샷에 대해 궁금한 점을 물어보세요. 쌓인 분석 기록을 참고해 답합니다.')]));
     list.lastElementChild?.scrollIntoView({ block: 'end' });
   };
-  const input = h('textarea', { rows: 1, placeholder: '예: 슬라이스를 줄이려면 뭘 먼저 고쳐야 해?' });
-  const sendBtn = h('button', { class: 'btn primary', onclick: () => send(input.value) }, '보내기');
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
+
 
   async function send(text) {
     const question = text.trim();
-    if (!question || sendBtn.disabled) return;
+    if (!question || coach.busy) return;
     input.value = '';
-    sendBtn.disabled = true;
+    coach.busy = true;
     const before = chat.slice(-6).map(({ role, text: t }) => ({ role, text: t }));
-    chat.push({ role: 'user', text: question });
-    const waiting = { role: 'assistant', text: '답을 준비하는 중…' };
-    chat.push(waiting);
-    draw();
+    const loggedIn = !!(await sync.getUser().catch(() => null));
+    const waiting = { role: 'assistant', pending: true, text: loggedIn ? '여러 AI에 묻고 답을 비교하는 중입니다. 보통 5~15초 걸립니다. 다른 탭에 다녀와도 답은 여기에 남습니다.' : '답을 준비하는 중…' };
+    chat.push({ role: 'user', text: question }, waiting);
+    saveChat(chat); // 질문은 보내는 즉시 저장한다
+    coach.redraw?.();
     let reply;
     try {
-      const r = await sync.askCoach({ question, context: buildContext({ club: state.club, leftHanded: state.leftHanded, history, concern }), history: before });
+      const r = loggedIn ? await sync.askCoach({ question, context: buildContext({ club: state.club, leftHanded: state.leftHanded, history, concern }), history: before }) : null;
       if (r) {
+        const short = (m) => m.split('/').pop().replace(/:free$/, '');
         reply = { role: 'assistant', text: r.answer, source: r.models.length > 1
-          ? `무료 AI ${r.models.length}개의 답을 비교해 정리 · ${r.models.map((m) => m.split('/').pop().replace(/:free$/, '')).join(', ')}`
-          : `무료 AI 답변 · ${r.models[0].split('/').pop().replace(/:free$/, '')}` };
+          ? `무료 AI ${r.models.length}개의 답을 비교해 정리 · ${r.models.map(short).join(', ')}`
+          : `무료 AI 답변 · ${short(r.models[0])}` };
       }
     } catch (e) {
-      const local = localAnswer(question, { club: state.club, history });
-      reply = { role: 'assistant', text: local.text, source: `내장 답변 (AI 사용 불가: ${e.message})` };
+      reply = { role: 'assistant', text: localAnswer(question, { club: state.club, history }).text, source: `내장 답변 (AI 사용 불가: ${e.message})` };
     }
-    if (!reply) {
-      const local = localAnswer(question, { club: state.club, history });
-      reply = { role: 'assistant', text: local.text, source: '내장 답변 · 설정에서 로그인하고 AI 조언을 설치하면 자유로운 질문에도 답합니다' };
-    }
-    chat[chat.indexOf(waiting)] = reply;
+    reply ??= { role: 'assistant', text: localAnswer(question, { club: state.club, history }).text, source: '내장 답변 · 설정에서 로그인하고 AI 조언을 설치하면 자유로운 질문에도 답합니다' };
+    const at = chat.indexOf(waiting);
+    if (at >= 0) chat[at] = reply; else chat.push(reply); // 그 사이 대화를 지웠다면 답만 덧붙인다
     saveChat(chat);
-    sendBtn.disabled = false;
-    draw();
+    coach.busy = false;
+    // 지금 보고 있는 화면이 조언 탭이면 바로 그리고, 아니면 탭에 표시를 남긴다
+    if (state.tab === 'coach') coach.redraw?.();
+    else tabs.querySelector('[data-tab=coach]')?.classList.add('has-badge');
   }
 
   const samples = ['슬라이스를 줄이려면?', '비거리를 늘리려면 뭘 먼저 고쳐야 해?', '내 스윙에서 가장 큰 문제는?', '뒤땅이 자주 나는 이유는?'];
@@ -964,6 +976,7 @@ async function renderCoach() {
     h('div', { class: 'composer' }, input, sendBtn),
     chat.length > 0 && h('button', { class: 'btn small', onclick: () => { if (confirm('대화 내용을 지울까요?')) { chat.length = 0; saveChat(chat); draw(); } } }, '대화 지우기'),
   );
+  coach.redraw = draw;
   draw();
 }
 

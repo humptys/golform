@@ -35,15 +35,15 @@ test('대화 구성: 기록과 질문을 함께 보내고 이전 대화는 최�
 test('여러 모델의 답을 받아 한 모델이 정리한다', async () => {
   const isJudge = (c) => c.system.includes('편집자');
   const f = fakeFetch({
-    gemini: (c) => (isJudge(c) ? '정리된 최종 답' : '제미니 답'),
-    groq: '그록 답', openrouter: '오픈라우터 답',
+    gemini: '제미니 답',
+    groq: (c) => (isJudge(c) ? '정리된 최종 답' : '그록 답'), openrouter: '오픈라우터 답',
   });
   const r = await answer('슬라이스?', '기록', [], KEYS, f);
   assert.equal(r.answer, '정리된 최종 답');
-  assert.deepEqual(r.models, ['gemini-3.8-flash', 'openai/gpt-oss-120b', 'some/free-model:free']);
-  assert.equal(r.judgedBy, 'gemini-3.8-flash');
+  assert.deepEqual(r.models, ['openai/gpt-oss-120b', 'gemini-3.8-flash', 'some/free-model:free']);
+  assert.equal(r.judgedBy, 'openai/gpt-oss-120b'); // 빠른 곳이 정리를 맡는다
   const judge = f.calls.find(isJudge);
-  assert.match(judge.prompt, /후보 1:\n제미니 답[\s\S]*후보 2:\n그록 답[\s\S]*후보 3:\n오픈라우터 답/);
+  assert.match(judge.prompt, /후보 1:\n그록 답[\s\S]*후보 2:\n제미니 답[\s\S]*후보 3:\n오픈라우터 답/);
 });
 
 test('모델이 없어졌으면 다음 모델로, 한 곳이 실패해도 나머지로 답한다', async () => {
@@ -84,4 +84,27 @@ test('요청 처리: 로그인·승인 확인, 빈 질문 거절, 교차 출처 
   const fail = await handle(req({ question: 'q' }), { SUPABASE_URL: 'https://x.supabase.co' }, fakeFetch({}));
   assert.equal(fail.status, 502);
   assert.match((await fail.json()).error, /API 키가 하나도/);
+});
+
+test('느린 한 곳을 끝까지 기다리지 않는다', async () => {
+  const base = fakeFetch({ gemini: '제미니 답', groq: (c) => (c.system.includes('편집자') ? '정리된 답' : '그록 답'), openrouter: '늦은 답' });
+  const slow = async (url, init) => {
+    if (url.includes('openrouter')) await new Promise((r) => setTimeout(r, 400));
+    return base(url, init);
+  };
+  const t0 = Date.now();
+  const r = await answer('q', '', [], { ...KEYS, COACH_GRACE_MS: '30' }, slow);
+  assert.ok(Date.now() - t0 < 300, `took ${Date.now() - t0}ms`);
+  assert.equal(r.answer, '정리된 답');
+  assert.deepEqual(r.models, ['openai/gpt-oss-120b', 'gemini-3.8-flash']);
+  assert.deepEqual(r.failed, [{ provider: 'openrouter', error: '응답이 늦어 제외' }]);
+  // 한 곳만 답했고 나머지가 계속 늦으면, 기한이 지난 뒤 그 답으로 진행한다
+  const verySlow = async (url, init) => {
+    if (!url.includes('groq') && !url.includes('supabase')) await new Promise((r) => setTimeout(r, 500));
+    return base(url, init);
+  };
+  const t1 = Date.now();
+  const one = await answer('q', '', [], { ...KEYS, COACH_DEADLINE_MS: '60' }, verySlow);
+  assert.ok(Date.now() - t1 < 350, `took ${Date.now() - t1}ms`);
+  assert.deepEqual([one.answer, one.judgedBy], ['그록 답', null]);
 });
